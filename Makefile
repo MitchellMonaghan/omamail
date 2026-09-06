@@ -6,8 +6,10 @@ QML_FILES := Service.qml BarWidget.qml App.qml \
 	providers/OutlookAuth.qml \
 	providers/ImapAuth.qml providers/ImapClient.qml \
 	providers/HeyAuth.qml providers/HeyClient.qml \
+	providers/JmapAuth.qml providers/JmapClient.qml providers/JmapPush.qml \
 	components/ImapSetupPage.qml \
 	components/OutlookSetupPage.qml \
+	components/JmapSetupPage.qml \
 	components/HeySetupPage.qml \
 	components/ProviderPicker.qml \
 	components/GmailIcon.qml \
@@ -30,6 +32,7 @@ QML_FILES := Service.qml BarWidget.qml App.qml \
 	components/AttachmentRow.qml \
   components/KeyHints.qml \
 	components/MessageReader.qml \
+	components/ConversationRail.qml \
 	components/ReaderNotice.qml \
 	components/InviteCard.qml \
 	components/ReaderBlankSlate.qml \
@@ -92,12 +95,16 @@ test-js:
 	node tests/test_model.js
 	node tests/test_icons.js
 	node tests/test_navigation.js
+	node tests/test_conversation.js
 	node tests/test_keymap.js
 	node tests/test_accounts.js
 	node tests/test_aliases.js
 	node tests/test_menu.js
 	node tests/test_provider.js
 	node tests/test_imap.js
+	node tests/test_jmap.js
+	node tests/test_jmap_threads.js
+	node tests/test_jmap_helpers.js
 	node tests/test_hey.js
 
 test-shell: test-shell-portable test-shell-libcurl
@@ -116,6 +123,8 @@ test-shell-portable:
 	bash tests/test_link_plugin.sh
 	bash tests/test_mailto.sh
 	bash tests/test_transport.sh
+	bash tests/test_jmap_transport.sh
+	python3 tests/test_jmap_stream.py
 	bash tests/test_attachment_open.sh
 	bash tests/test_attachment_save.sh
 	bash tests/test_attachment.sh

@@ -331,6 +331,57 @@ const withReplyTo = message.summarize({
 assert.strictEqual(withReplyTo.replyTo.email, "help@example.com")
 assert.strictEqual(withReplyTo.messageId, "<abc@mail.example.com>")
 
+// ------------------------------------------------------------- the thread block
+//
+// Every summary carries one, whatever provider it came from, so a row and a
+// cached row are the same shape and nothing above has to ask whether it is
+// there. A provider that does not group its listing reports a count of 0, which
+// means unknown and draws no badge — which is what this resource, carrying no
+// block at all, amounts to.
+deepEqual(summary.thread,
+  { id: "18f39", count: 0, unread: false, flagged: false, memberIds: [] })
+deepEqual(message.summarize({}, now).thread,
+  { id: "", count: 0, unread: false, flagged: false, memberIds: [] })
+
+// A collapsed listing hands one over, and `count` is how many members it
+// counted: a block cannot report a number it has no ids for.
+const collapsed = message.summarize({
+  id: "maaaaaf",
+  threadId: "d",
+  labelIds: ["INBOX", "UNREAD"],
+  thread: { id: "d", count: 3, unread: true, flagged: false,
+    memberIds: ["maaaaad", "maaaaae", "maaaaaf"] },
+  payload: { headers: [{ name: "Subject", value: "Re: Thread of three" }] }
+}, now)
+deepEqual(collapsed.thread,
+  { id: "d", count: 3, unread: true, flagged: false,
+    memberIds: ["maaaaad", "maaaaae", "maaaaaf"] })
+
+// The row's own marks are the conversation's as well as the message's. A thread
+// whose unread reply is not the message the server returned for this view is
+// still an unread row, and one with a flagged member is still a flagged row.
+const readRepresentative = message.summarize({
+  id: "maaaaad",
+  threadId: "d",
+  labelIds: ["DRAFT"],
+  thread: { id: "d", count: 3, unread: true, flagged: true,
+    memberIds: ["maaaaad", "maaaaae", "maaaaaf"] },
+  payload: { headers: [] }
+}, now)
+assert.strictEqual(readRepresentative.unread, true,
+  "the conversation has an unread member, so the row is unread")
+assert.strictEqual(readRepresentative.starred, true)
+
+// And the message's own answer is what is left when the block has none, so
+// nothing changes for a provider that reports no block.
+assert.strictEqual(message.summarize({
+  labelIds: ["UNREAD", "STARRED"], payload: { headers: [] }
+}, now).unread, true)
+assert.strictEqual(message.summarize({
+  labelIds: ["UNREAD", "STARRED"], payload: { headers: [] }
+}, now).starred, true)
+assert.strictEqual(collapsed.starred, false, "no counted member is flagged")
+
 assert.strictEqual(typeof message.draftFields, "function",
   "stored messages need one provider-neutral path back into compose")
 deepEqual(message.draftFields({
@@ -411,6 +462,102 @@ assert.strictEqual(payload.threadId, "t1")
 assert.strictEqual(
   Buffer.from(payload.raw, "base64url").toString("utf8").indexOf("To: a@b.com"), 0)
 assert.strictEqual(message.buildSendPayload({ to: "a@b.com" }).threadId, undefined)
+
+// The draft this message replaces, carried so a provider that can destroy the
+// old copy in the same request as the send does not leave one behind. Always
+// present, because a client reading it asks whether there is a draft to
+// destroy rather than whether the field exists.
+assert.strictEqual(message.buildSendPayload({ to: "a@b.com", draftId: "d-7" }).draftId, "d-7")
+assert.strictEqual(message.buildSendPayload({ to: "a@b.com" }).draftId, "",
+  "a compose window that was not opened from a draft names none")
+assert.strictEqual(message.buildSendPayload({ to: "a@b.com", draftId: 7 }).draftId, "7")
+
+// ---------------------------------------- the date and the id it leaves with
+//
+// The two headers themselves are asserted further down. What is asserted here
+// is that every shape the builder builds carries them as the message's own
+// headers, and that the address the mailbox is signed in as names the id when
+// the From line is left for the provider to fill in — Gmail writes its own and
+// the IMAP client puts the account on the envelope, so a compose window can
+// legitimately send none, and a JMAP server stores exactly what it was handed.
+{
+  const headersOf = (raw) => {
+    const found = {}
+    for (const line of raw.split("\r\n\r\n")[0].split("\r\n")) {
+      const at = line.indexOf(": ")
+      if (at > 0) found[line.substring(0, at)] = line.substring(at + 2)
+    }
+    return found
+  }
+  const DATE = "Mon, 05 Jan 2026 09:30:00 +0000"
+  const ID = "<fixed.1@example.net>"
+
+  // Every shape the builder builds, and the stated values are what a test
+  // reads back — the point of being able to state them at all.
+  const shapes = {
+    "a plain message": { to: "a@b.com", body: "hi" },
+    "a right-to-left message": { to: "a@b.com", body: "سلام دوست من", boundary: "RTLB" },
+    "a message with an attachment": {
+      to: "a@b.com", body: "hi", boundary: "MIXB",
+      attachments: [{ filename: "f.txt", mimeType: "text/plain", data: "aGk=" }]
+    },
+    "a calendar reply": {
+      to: "organiser@example.com", body: "Accepted.", boundary: "CALB",
+      calendar: { method: "REPLY", text: "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n" }
+    }
+  }
+  for (const name of Object.keys(shapes)) {
+    const built = message.buildRawMessage(Object.assign(
+      { from: "me@example.com", date: DATE, messageId: ID }, shapes[name]))
+    const headers = headersOf(built)
+    assert.strictEqual(headers["Date"], DATE, name + " is dated")
+    assert.strictEqual(headers["Message-ID"], ID, name + " is identified")
+  }
+
+  // Both are the message's own headers, not a part's: the twin is still the
+  // second of exactly two alternatives, and the calendar reply still has no
+  // twin of its own.
+  const rtl = message.parseRfc822(message.buildRawMessage({
+    to: "a@b.com", body: "سلام دوست من", boundary: "RTLB", date: DATE, messageId: ID
+  }))
+  assert.strictEqual(rtl.parts.length, 2)
+  assert.strictEqual(rtl.parts[1].mimeType, "text/html")
+  assert.strictEqual(message.headerFrom(rtl.headers, "Date"), DATE)
+  assert.strictEqual(message.headerFrom(rtl.headers, "Message-ID"), ID)
+
+  const invite = message.parseRfc822(message.buildRawMessage({
+    to: "organiser@example.com", body: "Accepted.", boundary: "CALB",
+    calendar: { method: "REPLY", text: "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n" },
+    date: DATE, messageId: ID
+  }))
+  assert.strictEqual(invite.parts.length, 2)
+  assert.strictEqual(invite.parts[1].mimeType, "text/calendar")
+  assert.strictEqual(message.headerFrom(invite.headers, "Message-ID"), ID)
+
+  // The From domain names the id when there is a From, whatever the mailbox
+  // is signed in as.
+  assert.ok(/^<[^<>@\s]+@example\.net>$/.test(headersOf(message.buildRawMessage({
+    from: "work@example.net", to: "a@b.com", body: "hi",
+    accountAddress: "me@ignored.example"
+  }))["Message-ID"]), "the From domain names the id when there is a From")
+
+  // No From: the signed-in address names it, in whichever form the account
+  // holds it.
+  assert.ok(/^<[^<>@\s]+@signed-in\.example>$/.test(
+    headersOf(message.buildRawMessage({
+      to: "a@b.com", body: "hi", accountAddress: "Me <me@signed-in.example>"
+    }))["Message-ID"]), "the signed-in address names the id when From is empty")
+  assert.strictEqual(message.messageIdDomain("", "me@signed-in.example"), "signed-in.example")
+  assert.strictEqual(message.messageIdDomain("nobody", "me@signed-in.example"),
+    "signed-in.example", "a From with no domain falls through to the account")
+  assert.strictEqual(message.messageIdDomain("", ""), "omamail.invalid")
+
+  // The two headers read one clock: the id's timestamp is the Date's second.
+  const sameClock = headersOf(message.buildRawMessage({ to: "a@b.com", body: "hi" }))
+  const idMillis = parseInt(sameClock["Message-ID"].substring(1).split(".")[0], 36)
+  assert.ok(Math.abs(idMillis - new Date(sameClock["Date"]).getTime()) < 1000,
+    "the id is minted at the instant the message is dated")
+}
 
 // ------------------------------------------- the direction a message states
 //

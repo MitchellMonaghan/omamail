@@ -77,7 +77,7 @@ function accountId(email, provider) {
 // anything written before providers existed — is Gmail: that is what every
 // account in an upgraded install actually is, and defaulting to it is what
 // stops an upgrade from presenting a working mailbox as unconfigured.
-var PROVIDERS = ["gmail", "outlook", "hey", "imap"]
+var PROVIDERS = ["gmail", "outlook", "hey", "imap", "jmap"]
 var DEFAULT_PROVIDER = "gmail"
 
 function normalizeProvider(value) {
@@ -117,6 +117,66 @@ function makeImapSettings(raw) {
   }
 }
 
+// The server settings a JMAP account needs, none of them secret either — the
+// app password or API token is the secret, and it lives in the keyring under
+// `Credentials.jmapKeyringAttributes`.
+//
+// Four fields, and every one of them is something sign-in *learned* rather
+// than something a user typed: the session URL is whichever address finally
+// answered with a session object, after discovery and its one redirect hop;
+// the scheme is whichever of Basic and Bearer the server accepted; the account
+// id is `primaryAccounts` for the mail capability, which every later request
+// names. Only the username is typed, and only when it is not the address.
+//
+// Nothing else from the session is kept here. Its URLs, its limits and its
+// state are cached beside the query cache and refetched when the server says
+// its state changed, because they are the server's answer rather than the
+// account's settings.
+function makeJmapSettings(raw) {
+  var values = raw || {}
+  return {
+    sessionUrl: trimmed(values.sessionUrl),
+    username: trimmed(values.username),
+    authScheme: jmapScheme(values.authScheme),
+    accountId: trimmed(values.accountId)
+  }
+}
+
+// The settings after a sign-in, which is the one event that changes three of
+// the four. Sign-in *learns* the URL that answered, the scheme the server
+// accepted and the account id its session named, and none of those is
+// anything the page could have written down before it ran: a typed host
+// becomes the URL discovery ended on, and an account id was never typed at
+// all. The username is the one typed field and is kept as it was. Whatever
+// the check did not report is kept too, so a result that is short a field
+// cannot blank a value that was already right.
+function jmapSettingsAfterSignIn(settings, result) {
+  var current = makeJmapSettings(settings)
+  var learned = result || {}
+  return makeJmapSettings({
+    sessionUrl: trimmed(learned.sessionUrl) !== "" ? learned.sessionUrl : current.sessionUrl,
+    username: current.username,
+    authScheme: trimmed(learned.authScheme) !== "" ? learned.authScheme : current.authScheme,
+    accountId: trimmed(learned.accountId) !== "" ? learned.accountId : current.accountId
+  })
+}
+
+// Basic or Bearer, and nothing else reaches an account: `none` is discovery's
+// unauthenticated well-known GET, which is not a way of signing in to
+// anything. Anything unrecognised — an empty field on an account that has not
+// signed in yet, a hand edit — is Basic, which is the scheme sign-in tries
+// first anyway.
+//
+// The names are `JmapProtocol.AUTH_BASIC` and `AUTH_BEARER`, written out here
+// rather than imported the way the port fallback above repeats
+// `Imap.normalizedPort`'s rule: the account list does not reach into a provider
+// for a constant. The transport script refuses any other scheme before curl
+// runs, so this is the first of two gates rather than the only one.
+function jmapScheme(value) {
+  var name = trimmed(value).toLowerCase()
+  return name === "bearer" ? "bearer" : "basic"
+}
+
 // The address arrives with the first successful sign-in for Gmail, and is
 // typed by hand for IMAP, so an account exists for a while with no id at all.
 // Such an entry is kept — it holds the OAuth client or the server settings the
@@ -133,6 +193,7 @@ function makeAccount(account) {
     clientId: trimmed(raw.clientId),
     clientSecret: trimmed(raw.clientSecret),
     imap: makeImapSettings(raw.imap),
+    jmap: makeJmapSettings(raw.jmap),
     label: trimmed(raw.label),
     signature: trimmed(raw.signature),
     // Whether this row is the setup form's working state rather than a
@@ -259,6 +320,31 @@ function add(list, account) {
   // Nothing is on screen until the first account with a real address arrives;
   // once one has, adding another must not yank the view away from it.
   if (entry.id && indexOfId(next.accounts, next.activeId) < 0) next.activeId = entry.id
+  return next
+}
+
+// One row edited in place: the setup form's save, or a host learning its own
+// address. The list is rebuilt through `add`, so a row that now names a
+// mailbox already in the list folds into that one rather than standing beside
+// it — but `add`'s rule for the selection is written for a list being built,
+// not for one being copied. Given no active row yet, it hands the selection to
+// the first named row it meets, and while a copy is half done that is row 0
+// whatever row was active. Editing a mailbox below the first used to move the
+// selection there, and the sign-in that followed the save went to the wrong
+// server. The selection is decided here instead: it stays with the row that
+// had it, under whatever id the edit gave that row.
+function replaceAt(list, index, entry) {
+  var source = copyList(list)
+  var at = Math.floor(Number(index))
+  if (!isFinite(at) || at < 0 || at >= source.accounts.length) return source
+  var replaced = source.accounts[at]
+  var replacement = makeAccount(entry)
+  var next = emptyList()
+  for (var i = 0; i < source.accounts.length; i++)
+    next = add(next, i === at ? replacement : source.accounts[i])
+  var wasActive = source.activeId !== "" && replaced.id === source.activeId
+  if (wasActive && replacement.id !== "") next.activeId = replacement.id
+  else if (indexOfId(next.accounts, source.activeId) >= 0) next.activeId = source.activeId
   return next
 }
 

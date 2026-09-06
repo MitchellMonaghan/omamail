@@ -49,9 +49,10 @@ three directories away from the client that calls it.
   tests can reach it without a compositor. QML holds no logic worth testing.
 - One JS resource may build on others with QML's `.import "Other.js" as Other`,
   which is how `providers/Registry.js` is assembled out of `Gmail.js`,
-  `Outlook.js`, `Hey.js` and `Imap.js` — and those out of `GmailApi.js` and `HeyCli.js` in
-  turn, because where a message lives on the web is a fact about the service
-  rather than about the registry. `tests/load.js` resolves the chain the same
+  `Outlook.js`, `Hey.js`, `Jmap.js` and `Imap.js` — and those out of `GmailApi.js`,
+  `HeyCli.js` and `JmapProtocol.js` in turn, because where a message lives on
+  the web, or what a query string means, is a fact about the service rather
+  than about the registry. `tests/load.js` resolves the chain the same
   way the engine does, so the tests exercise the real files.
 - Tests name the module path: `load("cache/Cache.js")`. A bare filename would no
   longer say where the thing lives.
@@ -222,21 +223,14 @@ key. What matters while working:
 
 ## Providers
 
-- A mailbox is a **provider**: `gmail`, `outlook`, `hey`, or `imap`, listed in that order
-  because IMAP is the answer for a server the other three do not name and a
-  chooser that opened with it would ask the question backwards. `Provider.js` is
-  the only place that knows the differences — which mailboxes exist, what a query
-  string means, what the service can be asked to do, and how it signs in.
-  Nothing above it branches on a provider id.
-- Two objects make a provider work: something that signs in (`AuthManager`,
-  `OutlookAuth`, `HeyAuth`, `ImapAuth`) and something that fetches (`GmailApiClient`,
-  `HeyClient`, `ImapClient`).
-  `MailAccount` builds one pair through a `Loader` and drives them through an
-  identical interface — same method names, same arguments, same callback shape.
-  Adding a provider is those two files and a registry entry.
+- A mailbox is a **provider**: `gmail`, `outlook`, `hey`, `jmap`, or `imap`, listed in that order because IMAP is the answer for a server the other four do not name and a chooser that opened with it would ask the question backwards. JMAP goes in front of it for that reason and one more — a server speaking both is better read over JMAP, so somebody who has one should meet it before settling for the catch-all. `Provider.js` is the only place that knows the differences — which mailboxes exist, what a query string means, what the service can be asked to do, and how it signs in. Nothing above it branches on a provider id.
+- Two objects make a provider work: something that signs in (`AuthManager`, `OutlookAuth`, `HeyAuth`, `JmapAuth`, `ImapAuth`) and something that fetches (`GmailApiClient`, `HeyClient`, `JmapClient`, `ImapClient`). `MailAccount` builds one pair through a `Loader` and drives them through an identical interface — same method names, same arguments, same callback shape. Adding a provider is those two files and a registry entry.
 - **Every client hands back Gmail's message resource**: a headers array, a MIME
-  tree, part bodies in base64url. That is what lets one list, one reader, one
-  cache and one set of actions serve every provider. `Message.parseRfc822` is
+  tree, part bodies in base64url — and, from a provider whose listing collapses
+  to conversations, a `thread` block on each row (`Message.threadOf`), which
+  every other provider leaves absent and the row reads as a count of 0. That is
+  what lets one list, one reader, one cache and one set of actions serve every
+  provider. `Message.parseRfc822` is
   the adapter that rebuilds that shape from the wire format, and it is worth
   keeping even where IMAP's own structures would have been more natural.
   HEY never serves an RFC 822 message at all, so `HeyClient.toMessage`
@@ -251,10 +245,9 @@ key. What matters while working:
   user has committed to it, with the row already moved. IMAP therefore has no
   "report spam" — moving a message to a Junk folder teaches a server nothing,
   and a button that quietly meant that is a promise the provider cannot keep.
-- An account id is the address for Gmail and `<provider>:<address>` for the
-  others. One address can legitimately be more than one mailbox, and a Gmail
-  account keeping the bare address is what stops an upgrade from having to
-  migrate cache directories, keyring entries and the active account.
+- **A provider's capability list is a ceiling**: an account may refuse one the provider declares and may never add one it does not, which is what the `refusals` argument to `Registry.can` and `Registry.refusal` weighs beside it, and what `Registry.mailboxes` reads to drop a rail row whose role never resolved — so a JMAP server with no Archive mailbox loses the row, the button and the `e` hint together, and says why.
+- **`conversations` is a different question from `threads`**: a server-side thread id does not settle whether the *listing* collapses, so they are two capabilities, and a provider declaring the first gets one row per conversation and a rail of that conversation's members down the side of the reader, walked with `n` and `p`.
+- An account id is the address for Gmail and `<provider>:<address>` for the others, the address lower-cased either way: `hey:you@example.org`, `jmap:you@example.org`, `imap:you@example.org`. One address can legitimately be more than one mailbox, and a Gmail account keeping the bare address is what stops an upgrade from having to migrate cache directories, keyring entries and the active account.
 - Where a message and a mailbox live on the web is a provider question, not
   `MailAccount`'s. `Registry.webMessageUrl` and `webBoxUrl` are that seam; the
   Gmail call that used to sit in `MailAccount` would have opened Gmail for the
@@ -313,6 +306,8 @@ key. What matters while working:
   it base64-encoded on one line of stdin, so a password never reaches the
   process table and nothing needs escaping on the way; the config carrying it
   goes to curl's own stdin rather than to a file that would be on disk.
+- The JMAP transport is `scripts/jmap-transport.sh` beside it — the same curl and the same base64 stdin line, with five verbs and a four-line reply — except `stream`, which holds the event connection open. `scripts/jmap-stream.py` owns curl and bounds each event before forwarding it to the desktop, normalizing CR, LF and CRLF to LF. A QML size check after `SplitParser` is too late: the parser has already buffered the event. Stopping or refusing the stream must also terminate curl.
+- JMAP discovery starts at the address domain’s HTTPS well-known URL, or at the server URL the user supplied. An unauthenticated DNS SRV answer must never authorize a credential destination; an HTTPS probe of the target only authenticates that target, not its relationship to the mailbox domain.
 - **The response comes back base64 too, and that is load-bearing.** IMAP
   measures a literal in octets. Read as UTF-8 text, 2048 octets of a message
   with an accent in it is fewer than 2048 characters, and the parser walks off

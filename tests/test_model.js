@@ -6,6 +6,16 @@ const model = load("account/Model.js")
 // The mailboxes moved to Provider.js along with everything else that differs
 // between mail services; tests/test_provider.js covers them there.
 
+// A conversation row and its representative's rail stop share an id but
+// express different intent. Repeating one must not erase that distinction.
+const rowRead = { id: "m3", action: "markRead", cacheKey: "inbox",
+  sourceLabelId: "", quiet: false, memberOnly: false }
+const memberRead = { ...rowRead, memberOnly: true }
+const memberAgain = model.enqueueAction([memberRead], memberRead)
+assert.strictEqual(memberAgain.length, 1)
+assert.strictEqual(memberAgain[0].memberOnly, true)
+deepEqual(model.enqueueAction([memberRead], rowRead), [memberRead, rowRead])
+
 // ------------------------------------------------------------ setup state
 
 assert.strictEqual(model.setupState({ toolsPresent: false }), "tools_missing")
@@ -130,6 +140,145 @@ deepEqual(starred.labelIds, ["INBOX", "UNREAD", "STARRED"])
 deepEqual(model.applyLabelChange(starred, "star").labelIds, ["INBOX", "UNREAD", "STARRED"])
 assert.strictEqual(model.applyLabelChange(row, "archive").inInbox, false)
 assert.strictEqual(model.applyLabelChange(null, "star"), null)
+
+// ------------------------------------------------------ a row is a conversation
+//
+// A row on a provider that collapses its listing stands for a conversation: a
+// representative plus counted members, in a `thread` block whose `unread` and
+// `flagged` are any-member and whose `count` is `memberIds.length`, 0 meaning
+// unknown. What an action on such a row acts on is decided here, above the
+// client seam, so no client expands anything.
+
+// Scope is a property of the verb, in one table. Gmail's rule: everything
+// reaches the conversation except star, which is a note about one message.
+// Unstar is not star's mirror — the row's star is the conversation's, so an
+// unstar that left a reply starred would leave the row starred.
+assert.strictEqual(model.actionScope("archive"), "conversation")
+assert.strictEqual(model.actionScope("unarchive"), "conversation")
+assert.strictEqual(model.actionScope("trash"), "conversation")
+assert.strictEqual(model.actionScope("untrash"), "conversation")
+assert.strictEqual(model.actionScope("spam"), "conversation")
+assert.strictEqual(model.actionScope("markRead"), "conversation")
+assert.strictEqual(model.actionScope("markUnread"), "conversation")
+assert.strictEqual(model.actionScope("unstar"), "conversation")
+assert.strictEqual(model.actionScope("star"), "message")
+assert.strictEqual(model.actionScope(""), "message")
+
+const block = (over) => Object.assign(
+  { id: "t1", count: 3, unread: true, flagged: false,
+    memberIds: ["m1", "m2", "m3"] }, over || {})
+const conversation = (over) => Object.assign(
+  { id: "m1", labelIds: ["INBOX"], unread: true, starred: false, inInbox: true,
+    thread: block() }, over || {})
+
+// Expansion is a property of the row. Every counted member for a
+// conversation-scoped verb, the representative alone for star.
+deepEqual(model.actionTargets(conversation(), "markRead"), ["m1", "m2", "m3"])
+deepEqual(model.actionTargets(conversation(), "archive"), ["m1", "m2", "m3"])
+deepEqual(model.actionTargets(conversation(), "star"), ["m1"])
+// A row with no block is its own only target, which is Gmail, IMAP, and HEY's
+// posting — already the conversation its client acts on.
+deepEqual(model.actionTargets({ id: "g1" }, "markRead"), ["g1"])
+deepEqual(model.actionTargets({ id: "h1", thread: { id: "t", memberIds: [] } },
+  "trash"), ["h1"])
+// A conversation of one expands to the one member it counted.
+deepEqual(model.actionTargets(
+  conversation({ thread: block({ count: 1, memberIds: ["m1"] }) }), "markRead"),
+  ["m1"])
+deepEqual(model.actionTargets(null, "markRead"), [])
+
+// A member is found by its row: own ids first, so a representative is never
+// found as somebody else's member.
+const rows = [{ id: "z", thread: { id: "t0", memberIds: ["m2", "z"] } },
+  conversation()]
+assert.strictEqual(model.rowIndexForMember(rows, "z"), 0)
+assert.strictEqual(model.rowIndexForMember(rows, "m1"), 1)
+assert.strictEqual(model.rowIndexForMember(rows, "m3"), 1)
+assert.strictEqual(model.rowIndexForMember(rows, "nobody"), -1)
+assert.strictEqual(model.rowIndexForMember(rows, ""), -1)
+assert.strictEqual(model.rowHoldsMember(conversation(), "m2"), true)
+assert.strictEqual(model.rowHoldsMember(conversation(), "m1"), true)
+assert.strictEqual(model.rowHoldsMember(conversation(), "other"), false)
+assert.strictEqual(model.rowHoldsMember(null, "m1"), false)
+
+// The block after one member changed. A member's own flag is read from its
+// labels: `unread` on a summary is already the OR with its conversation, so
+// reading that would keep the row unread for ever.
+const members = (over) => Object.assign({
+  m1: { id: "m1", labelIds: ["INBOX"] },
+  m2: { id: "m2", labelIds: ["INBOX", "UNREAD"] },
+  m3: { id: "m3", labelIds: ["INBOX"] }
+}, over || {})
+
+// All three known and one still unread: the row stays unread.
+deepEqual(model.threadAfterMemberChange(conversation(), members()),
+  block({ unread: true }))
+// All three known and all read: it clears, on evidence.
+deepEqual(model.threadAfterMemberChange(conversation(),
+  members({ m2: { id: "m2", labelIds: ["INBOX"] } })),
+  block({ unread: false }))
+// One unknown and the row already unread: it stays unread, because the member
+// nobody has a summary for may be the unread one.
+deepEqual(model.threadAfterMemberChange(conversation(),
+  { m1: { id: "m1", labelIds: ["INBOX"] }, m3: { id: "m3", labelIds: ["INBOX"] } }),
+  block({ unread: true }))
+// One unknown and the row already read: an unknown member never flips a flag
+// *on* either, so it stays read.
+deepEqual(model.threadAfterMemberChange(conversation({ thread: block({ unread: false }) }),
+  { m1: { id: "m1", labelIds: ["INBOX"] }, m3: { id: "m3", labelIds: ["INBOX"] } }),
+  block({ unread: false }))
+// A starred member makes the row starred the same way.
+deepEqual(model.threadAfterMemberChange(conversation(),
+  members({ m3: { id: "m3", labelIds: ["INBOX", "STARRED"] } })),
+  block({ unread: true, flagged: true }))
+assert.strictEqual(model.threadAfterMemberChange({ id: "g1" }, {}), null)
+
+// A conversation action asserts the block outright, because every counted
+// member was sent the same patch.
+deepEqual(model.threadAfterAction(conversation(), "markRead"), block({ unread: false }))
+deepEqual(model.threadAfterAction(conversation({ thread: block({ unread: false }) }),
+  "markUnread"), block({ unread: true }))
+deepEqual(model.threadAfterAction(conversation({ thread: block({ flagged: true }) }),
+  "unstar"), block({ flagged: false }))
+// Star is message-scoped, so it asserts nothing about the conversation.
+deepEqual(model.threadAfterAction(conversation({ thread: block({ flagged: false }) }),
+  "star"), block({ flagged: false }))
+
+// The row's own flags stay the OR `Message.summarize` made them: a
+// representative read while a reply is not is still an unread row.
+const readRow = model.applyLabelChange(conversation(), "markRead")
+assert.strictEqual(readRow.unread, true, "a member is still unread")
+deepEqual(readRow.labelIds, ["INBOX"])
+const readConversation = model.applyLabelChange(conversation(), "markRead", "",
+  model.threadAfterAction(conversation(), "markRead"))
+assert.strictEqual(readConversation.unread, false)
+assert.strictEqual(readConversation.thread.unread, false)
+
+// Whether the row leaves. With a block the recomputed conversation decides; the
+// verb rule is what every row without one keeps, so Gmail and IMAP are
+// untouched.
+// The row is the last argument, after the view's own facts.
+const survives = (key, action, row) => model.survivesAction(key, action, "", false, "", row)
+assert.strictEqual(survives("unread", "markRead", conversation()), true)
+assert.strictEqual(survives("unread", "markRead",
+  conversation({ thread: block({ unread: false }) })), false)
+assert.strictEqual(survives("unread", "markRead", { id: "g1" }), false)
+assert.strictEqual(survives("starred", "unstar",
+  conversation({ thread: block({ flagged: true }) })), true)
+assert.strictEqual(survives("starred", "unstar",
+  conversation({ thread: block({ flagged: false }) })), false)
+assert.strictEqual(survives("starred", "unstar", { id: "g1" }), false)
+// Every other case is the verb rule, block or no block.
+assert.strictEqual(survives("inbox", "archive", conversation()), false)
+assert.strictEqual(survives("inbox", "markRead", conversation()), true)
+assert.strictEqual(survives("trash", "trash", conversation()), true)
+
+// "Mark these read" counts rows, because rows are what the user saw, and names
+// them from evidence: "conversations" only where a row stood for more than one.
+assert.strictEqual(model.markAllReadNote(3, true), "3 conversations marked read")
+assert.strictEqual(model.markAllReadNote(3, false), "3 messages marked read")
+assert.strictEqual(model.markAllReadNote(1, true), "1 conversation marked read")
+assert.strictEqual(model.markAllReadNote(1, false), "1 message marked read")
 
 // ------------------------------------------------------------ list edits
 
@@ -275,6 +424,18 @@ assert.strictEqual(model.resultSummary([{}, {}], 87, true), "2 of about 87")
 // made, and there is a Load more below saying the rest exists.
 assert.strictEqual(model.resultSummary([{}, {}, {}], 1, true), "3 messages so far")
 assert.strictEqual(model.resultSummary([{}, {}, {}], 3, true), "3 messages so far")
+// The footer follows the same evidence as the note above it. A row carrying a
+// block of two or more has been collapsed, so what is counted is conversations;
+// a listing that reports no members — HEY's, Gmail's, IMAP's — stays "messages",
+// because a row there stands for a number nobody can see.
+assert.strictEqual(model.resultSummary(
+  [{ thread: { id: "t", memberIds: ["a", "b"] } }, {}], 2, false), "2 conversations")
+assert.strictEqual(model.resultSummary(
+  [{ thread: { id: "t", memberIds: ["a", "b"] } }, {}], 87, true), "2 of about 87")
+assert.strictEqual(model.resultSummary(
+  [{ thread: { id: "t", memberIds: ["a", "b"] } }], 1, true), "1 conversation so far")
+assert.strictEqual(model.resultSummary(
+  [{ thread: { id: "t", memberIds: ["a"] } }, {}], 2, false), "2 messages")
 
 // The foot of the window names the account and then its sync age, in a
 // form short enough to sit after an address.
@@ -494,6 +655,16 @@ deepEqual(model.unavailableActions({ archive: false, star: false }), ["archive",
 deepEqual(model.unavailableActions(null), ["archive", "star"],
   "an unknown provider offers nothing it cannot prove")
 
+// The number a row's badge shows, and the floor under it: two or more on a
+// provider that grouped its listing, else nothing — a count of 0 is a provider
+// that never grouped, a count of 1 would say nothing, and a row cached before
+// rows carried a block has no block to read.
+assert.strictEqual(model.badgeCount({ thread: { id: "d", count: 3, memberIds: ["a", "b", "c"] } }), 3)
+assert.strictEqual(model.badgeCount({ thread: { id: "d", count: 1, memberIds: ["a"] } }), 0)
+assert.strictEqual(model.badgeCount({ thread: { id: "d", count: 0, memberIds: [] } }), 0)
+assert.strictEqual(model.badgeCount({ id: "m" }), 0)
+assert.strictEqual(model.badgeCount(null), 0)
+
 console.log("test_model.js ok")
 
 // ------------------------------------------------------------- reading zoom
@@ -575,6 +746,41 @@ assert.strictEqual(full.snippet, "Yes")
 // case rather than an error.
 assert.strictEqual(model.detailSummary(null, bodyless).subject, "(no subject)")
 assert.strictEqual(model.detailSummary(listed, null), listed)
+
+// A detail read is one message and knows nothing about the conversation it sits
+// in, so its block reports a count of 0 — unknown, not "one". The row's own
+// block stands until a listing replaces it, or opening a conversation would
+// drop its count.
+const grouped = {
+  id: "maaaaaf", subject: "Re: Thread of three",
+  from: { name: "Bea", email: "bea@example.org" }, snippet: "Third",
+  date: new Date("2026-08-22T10:00:00Z"), time: "10:00", fullTime: "x",
+  unread: true, starred: false,
+  thread: { id: "d", count: 3, unread: true, flagged: false,
+    memberIds: ["maaaaad", "maaaaae", "maaaaaf"] }
+}
+const opened = model.detailSummary(grouped, {
+  id: "maaaaaf", subject: "Re: Thread of three",
+  from: { name: "Bea", email: "bea@example.org" }, snippet: "Third",
+  date: new Date("2026-08-22T10:00:00Z"), time: "10:00", fullTime: "x",
+  unread: false, starred: false,
+  thread: { id: "d", count: 0, unread: false, flagged: false, memberIds: [] }
+})
+assert.strictEqual(opened.thread.count, 3, "the row keeps the count the listing gave it")
+deepEqual(opened.thread.memberIds, ["maaaaad", "maaaaae", "maaaaaf"])
+// Only the block. `unread` is something the detail read does carry, so it stays
+// its answer — restoring it from a block composed before the message was opened
+// would put the unread mark back on the row the reader is showing.
+assert.strictEqual(opened.unread, false)
+
+// A detail read that does know wins, as everything else it carries does.
+assert.strictEqual(model.detailSummary(grouped, {
+  id: "maaaaaf", subject: "Re: Thread of three",
+  from: { name: "Bea", email: "bea@example.org" }, snippet: "Third",
+  date: new Date("2026-08-22T10:00:00Z"), time: "10:00", fullTime: "x",
+  thread: { id: "d", count: 2, unread: false, flagged: false,
+    memberIds: ["maaaaae", "maaaaaf"] }
+}).thread.count, 2)
 
 // ------------------------------------------------------ a CLI-shaped sign-in
 //

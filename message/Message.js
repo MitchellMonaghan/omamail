@@ -811,10 +811,52 @@ function decodeSnippet(text) {
   return htmlToText(String(text || "")).replace(/\s+/g, " ").trim()
 }
 
+// The conversation a row stands for:
+//
+//   { id, count, unread, flagged, memberIds }
+//
+// Every summary carries one, whatever provider it came from, so a row and a
+// cached row are the same shape and nothing above has to ask whether the block
+// is there. `memberIds` are the counted members oldest first and `count` is
+// their length — a count of 0 means the provider does not group its listing, or
+// does not know, and the row draws no badge. A conversation is never one
+// message: a count of 1 draws nothing either.
+//
+// `unread` and `flagged` are the whole conversation's, which is why the row's
+// own `unread` and `starred` below take them as well as the message's. A
+// provider that reports no block reports neither, so nothing changes for it.
+function threadOf(message) {
+  var source = message && message.thread && typeof message.thread === "object"
+    ? message.thread : {}
+  return normalizeThread(source, message ? message.threadId : "")
+}
+
+// A block in the shape above, whatever shape it arrived in: the ids trimmed
+// and emptied of blanks, the count their length, the flags read as booleans,
+// and `fallbackId` the thread id when the block names none. This is the one
+// normalisation; `Conversation.blockOf` reads a cached row through it too.
+function normalizeThread(block, fallbackId) {
+  var source = block && typeof block === "object" ? block : {}
+  var list = Array.isArray(source.memberIds) ? source.memberIds : []
+  var ids = []
+  for (var i = 0; i < list.length; i++) {
+    var id = String(list[i] === undefined || list[i] === null ? "" : list[i]).trim()
+    if (id !== "") ids.push(id)
+  }
+  return {
+    id: String(source.id || fallbackId || "").trim(),
+    count: ids.length,
+    unread: source.unread === true,
+    flagged: source.flagged === true,
+    memberIds: ids
+  }
+}
+
 function summarize(message, now) {
   var from = parseAddress(headerValue(message, "From"))
   var date = messageDate(message)
   var subject = decodedHeader(message, "Subject").replace(/\s+/g, " ").trim()
+  var thread = threadOf(message)
   return {
     id: String(message && message.id ? message.id : ""),
     threadId: String(message && message.threadId ? message.threadId : ""),
@@ -833,8 +875,15 @@ function summarize(message, now) {
     date: date,
     time: relativeTime(date, now),
     fullTime: fullTime(date),
-    unread: hasLabel(message, "UNREAD"),
-    starred: hasLabel(message, "STARRED"),
+    thread: thread,
+    // The conversation's, not only the representative's. A thread whose unread
+    // reply is not the message the server returned for this view is still an
+    // unread row, and the representative is a counted member of its own
+    // conversation in every view that can produce one — so the two readings
+    // agree wherever both have an answer, and the message's own is what is left
+    // when the block has none.
+    unread: hasLabel(message, "UNREAD") || thread.unread,
+    starred: hasLabel(message, "STARRED") || thread.flagged,
     important: hasLabel(message, "IMPORTANT"),
     inInbox: hasLabel(message, "INBOX"),
     inTrash: hasLabel(message, "TRASH"),
@@ -1013,17 +1062,29 @@ function mimeBoundary(given) {
   return "=_Omamail_" + (new Date()).getTime().toString(36) + "_" + random
 }
 
-// The domain half of a Message-ID is the sender's own, so the id agrees with the address the message is from.
-function messageIdDomain(from) {
-  var address = headerSafe(from).trim()
+// The domain of an address, reduced to the characters a domain may hold, or
+// "" when the value carries none.
+function addressDomain(value) {
+  var address = headerSafe(value).trim()
   var at = address.lastIndexOf("@")
-  var domain = at < 0 ? "" : address.substring(at + 1).replace(/[^A-Za-z0-9.-]/g, "")
-  // RFC 2606 reserves .invalid, so a message with no From borrows no domain that belongs to somebody else.
+  return at < 0 ? "" : address.substring(at + 1).replace(/[^A-Za-z0-9.-]/g, "")
+}
+
+// The domain half of a Message-ID is the sender's own, so the id agrees with
+// the address the message is from — or, when the From line is left for the
+// provider to fill in, the address the mailbox is signed in as. Gmail writes
+// its own From and the IMAP client puts the account on the envelope rather
+// than in the headers, so a compose window sending none is ordinary; a JMAP
+// server stores exactly the bytes it was handed, so there the fallback is what
+// keeps the id in the account's own domain.
+function messageIdDomain(from, accountAddress) {
+  var domain = addressDomain(from) || addressDomain(accountAddress)
+  // RFC 2606 reserves .invalid, so a message with no address at all borrows no domain that belongs to somebody else.
   return domain === "" ? "omamail.invalid" : domain
 }
 
 // Unique by the rule mimeBoundary already uses, and the caller may state one, which is what lets a test read it.
-function messageIdValue(given, from, nowMs) {
+function messageIdValue(given, from, nowMs, accountAddress) {
   var stated = String(given === undefined || given === null ? "" : given)
   // A stated id is this client's own choice rather than a stranger's, so one that is not an id is replaced.
   if (stated.length <= 250
@@ -1031,7 +1092,8 @@ function messageIdValue(given, from, nowMs) {
     return stated
   var now = Math.floor(Number(nowMs) || Date.now())
   var random = Math.floor(Math.random() * 0x100000000).toString(36)
-  return "<" + now.toString(36) + "." + random + ".omamail@" + messageIdDomain(from) + ">"
+  return "<" + now.toString(36) + "." + random + ".omamail@"
+    + messageIdDomain(from, accountAddress) + ">"
 }
 
 // The date a message states, in RFC 5322's own shape: a numeric zone rather than toUTCString's obsolete GMT.
@@ -1143,6 +1205,9 @@ function pushBodyPart(lines, body, direction, boundary) {
 
 function buildRawMessage(fields) {
   var values = fields || {}
+  // One reading of the clock for both headers, so a message cannot be dated a
+  // millisecond apart from the id that names it.
+  var now = Date.now()
   var lines = []
   if (values.from) lines.push(fromHeader(values.from, values.fromName))
   lines.push(foldHeader("To", values.to || ""))
@@ -1154,10 +1219,14 @@ function buildRawMessage(fields) {
     lines.push("In-Reply-To: " + inReplyTo)
     lines.push("References: " + (referenceValue(values.references) || inReplyTo))
   }
+  // Behind the addressing rather than in front of it: RFC 5322 makes header
+  // order insignificant outside the trace fields, so the raw form still opens
+  // with the From line everything that reads one here already expects.
   // RFC 5322 requires a Date on a message this client originates, and the writer's clock is the one it means.
-  lines.push("Date: " + sentDate(values.date))
+  lines.push("Date: " + sentDate(values.date, now))
   // RFC 5322 asks every message for an id, and a relay told not to add missing headers relays none.
-  lines.push("Message-ID: " + messageIdValue(values.messageId, values.from))
+  lines.push("Message-ID: "
+    + messageIdValue(values.messageId, values.from, now, values.accountAddress))
   lines.push("MIME-Version: 1.0")
 
   var calendar = values.calendar && String(values.calendar.text || "") !== ""
@@ -1229,6 +1298,12 @@ function buildRawMessage(fields) {
 function buildSendPayload(fields) {
   var payload = { raw: encodeBase64Url(buildRawMessage(fields)) }
   if (fields && fields.threadId) payload.threadId = String(fields.threadId)
+  // The draft this message replaces, so a provider that can destroy it in the
+  // same request as the send or the save does not leave the old copy behind.
+  // Always present and empty when the compose window was not opened from one,
+  // because a client reading it asks whether there is one to destroy rather
+  // than whether the field exists.
+  payload.draftId = String((fields && fields.draftId) || "")
   var files = Array.isArray(fields && fields.attachments) ? fields.attachments : []
   var paths = []
   for (var i = 0; i < files.length; i++) {

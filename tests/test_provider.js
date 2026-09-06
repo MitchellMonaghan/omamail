@@ -5,16 +5,20 @@ const provider = load("providers/Registry.js")
 
 // ------------------------------------------------------------- the registry
 //
-// Three providers, and the ids are what an accounts.json holds — renaming one
+// Four providers, and the ids are what an accounts.json holds — renaming one
 // silently orphans every account already written with the old name.
 //
 // The order is the order the chooser lists them in: the two hosted mailboxes
-// with a service of their own, then the one that is every other mailbox.
-deepEqual(provider.ids(), ["gmail", "outlook", "hey", "imap"])
+// with a service of their own, then the two that are every other mailbox. IMAP
+// is last because it is the catch-all, and JMAP goes in front of it because a
+// server that speaks both is better read over JMAP.
+deepEqual(provider.ids(), ["gmail", "outlook", "hey", "jmap", "imap"])
 assert.strictEqual(provider.get("gmail").name, "Gmail")
 assert.strictEqual(provider.get("outlook").name, "Outlook")
 assert.strictEqual(provider.get("imap").name, "IMAP")
 assert.strictEqual(provider.get("hey").name, "HEY")
+assert.strictEqual(provider.get("jmap").name, "JMAP")
+assert.strictEqual(provider.exists("jmap"), true)
 
 // An id from a newer build, or a hand-edited file, still has to open a window.
 assert.strictEqual(provider.get("nonesuch").id, "gmail")
@@ -79,6 +83,64 @@ assert.strictEqual(provider.can("hey", "labels"), true)
 assert.strictEqual(provider.can("hey", "star"), false, "HEY has no flag")
 assert.strictEqual(provider.can("hey", "archive"), false, "HEY has no archive")
 
+// Having a thread id and listing conversations are two questions. HEY's rows
+// already are conversations, so the panel groups nothing; Gmail has the ids and
+// still lists messages, because collapsing its list would cost a `threads.get`
+// per thread; IMAP has neither.
+assert.strictEqual(provider.can("hey", "conversations"), true, "a HEY row is a topic")
+assert.strictEqual(provider.can("gmail", "conversations"), false,
+  "Gmail has thread ids and still lists messages")
+assert.strictEqual(provider.can("imap", "conversations"), false)
+assert.strictEqual(provider.can("gmail", "threads"), true,
+  "and the two answers are independent of each other")
+
+// ---------------------------------------------------------- refusals
+//
+// A provider's list is a ceiling, not a promise every account of that kind can
+// keep: one server has an Archive folder and trains on its Junk, the next has
+// neither. So an account may withdraw a capability its provider declares — and
+// may never add one, which is what keeps the button rule above from being
+// argued back open one account at a time.
+
+// No third argument, and null, answer exactly as the ceiling does. That is what
+// makes the hook provider-neutral: Gmail, HEY and IMAP expose no refusals at
+// all and nothing about them changes.
+assert.strictEqual(provider.can("gmail", "archive"), true)
+assert.strictEqual(provider.can("gmail", "archive", null), true)
+assert.strictEqual(provider.can("gmail", "archive", undefined), true)
+assert.strictEqual(provider.can("gmail", "archive", {}), true,
+  "an object with no key for it says nothing about it")
+
+// A refused capability is a no, whatever the ceiling said.
+const refusals = {
+  archive: "This account has no Archive mailbox",
+  spam: "This server is not known to learn from its Junk mailbox"
+}
+assert.strictEqual(provider.can("gmail", "archive", refusals), false)
+assert.strictEqual(provider.can("gmail", "spam", refusals), false)
+assert.strictEqual(provider.can("gmail", "star", refusals), true,
+  "a refusal takes away only the keys it names")
+
+// And a refusal cannot hand an account something its provider does not have.
+// The one direction this seam runs in is the whole of its safety argument.
+assert.strictEqual(provider.can("hey", "archive", { archive: "" }), false)
+assert.strictEqual(provider.can("imap", "spam", { spam: "" }), false)
+assert.strictEqual(provider.can("hey", "star", { star: "of course it can" }), false)
+
+// The reason, for the note shown when a key reaches an action the account
+// cannot honour. Empty where nothing was refused — including where the ceiling
+// never offered it, since there is nothing there to withdraw and the provider's
+// own wording is the honest answer.
+assert.strictEqual(provider.refusal("gmail", "archive", refusals),
+  "This account has no Archive mailbox")
+assert.strictEqual(provider.refusal("gmail", "spam", refusals),
+  "This server is not known to learn from its Junk mailbox")
+assert.strictEqual(provider.refusal("gmail", "star", refusals), "")
+assert.strictEqual(provider.refusal("gmail", "archive", null), "")
+assert.strictEqual(provider.refusal("gmail", "archive"), "")
+assert.strictEqual(provider.refusal("hey", "archive", { archive: "not this way" }), "",
+  "a ceiling that never offered it has nothing to explain")
+
 // Every provider here can be connected to. The `unavailable` seam is kept for
 // the next one that cannot be, which is what HEY was until `hey` shipped.
 assert.strictEqual(provider.isConnectable("gmail"), true)
@@ -129,6 +191,33 @@ const boxes = provider.mailboxes("gmail")
 boxes.push({ key: "invented" })
 assert.strictEqual(provider.mailboxes("gmail").length, boxes.length - 1,
   "the mailbox list is copied on the way out")
+
+// Which rail rows exist is a fact about the provider; which of them this
+// account actually has a mailbox for is a fact about the account. A row with
+// nothing behind it is dropped rather than drawn dead — and because the number
+// keys are positional, the rows below it move up.
+const imapKeys = provider.mailboxes("imap").map(box => box.key)
+deepEqual(provider.mailboxes("imap", null).map(box => box.key), imapKeys,
+  "no absent list is the whole list")
+deepEqual(provider.mailboxes("imap", []).map(box => box.key), imapKeys)
+deepEqual(provider.mailboxes("imap", "archive").map(box => box.key), imapKeys,
+  "and so is anything that is not a list")
+
+const withoutArchive = provider.mailboxes("imap", ["archive"])
+assert.strictEqual(withoutArchive.filter(box => box.key === "archive").length, 0)
+assert.strictEqual(withoutArchive.length, imapKeys.length - 1)
+assert.strictEqual(withoutArchive.indexOf(withoutArchive.filter(box => box.key === "spam")[0]),
+  imapKeys.indexOf("spam") - 1, "Junk moves up when Archive is not there")
+
+deepEqual(provider.mailboxes("imap", ["archive", "spam", "trash"]).map(box => box.key),
+  imapKeys.filter(key => key !== "archive" && key !== "spam" && key !== "trash"))
+deepEqual(provider.mailboxes("imap", ["nonesuch"]).map(box => box.key), imapKeys,
+  "a key this provider never had drops nothing")
+
+// The copy rule survives the argument.
+const dropped = provider.mailboxes("imap", ["archive"])
+dropped.push({ key: "invented" })
+assert.strictEqual(provider.mailboxes("imap", ["archive"]).length, dropped.length - 1)
 
 assert.strictEqual(provider.hasMailbox("gmail", "all"), true)
 assert.strictEqual(provider.hasMailbox("imap", "all"), false, "IMAP has Archive, not All mail")
@@ -286,7 +375,21 @@ assert.strictEqual(provider.usesPassword("imap"), true)
 assert.strictEqual(provider.usesPassword("gmail"), false)
 
 assert.strictEqual(provider.badge("imap"), "IMAP")
+assert.strictEqual(provider.badge("jmap"), "JMAP", "the switcher badge is the protocol, no host")
 assert.ok(provider.summary("imap").length > 0)
+
+// One more line about a particular mailbox, for the row that lists them. Only
+// the provider with something to add answers, and it answers from the account
+// entry rather than from anything the panel holds.
+assert.strictEqual(provider.detail("gmail", { email: "ada@gmail.com" }), "")
+assert.strictEqual(provider.detail("hey", {}), "")
+assert.strictEqual(provider.detail("imap", { imap: { imapHost: "imap.example.org" } }), "")
+assert.strictEqual(
+  provider.detail("jmap", { jmap: { sessionUrl: "https://mail.example.org/jmap/session" } }),
+  "JMAP · mail.example.org")
+assert.strictEqual(provider.detail("jmap", {}), "JMAP",
+  "a mailbox that has not signed in yet still says what kind it is")
+assert.strictEqual(provider.detail("jmap", null), "JMAP")
 assert.strictEqual(provider.DEFAULT_ID, "gmail",
   "an account written before providers existed is a Gmail account")
 

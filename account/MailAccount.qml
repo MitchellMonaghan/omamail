@@ -12,6 +12,7 @@ import "../message/Calendar.js" as Calendar
 import "../message/Unsubscribe.js" as Unsub
 import "../message/Outbox.js" as Outbox
 import "Model.js" as Model
+import "Conversation.js" as Conversation
 import "Accounts.js" as Accounts
 import "RenderCache.js" as RenderCache
 import "../providers/Registry.js" as Provider
@@ -51,6 +52,10 @@ Item {
   // Server settings for an IMAP account, straight off the account entry. Unused
   // by the others, and normalised before anything can dial one.
   property var imapSettings: null
+  // The same for a JMAP account, and the same rule: what is on the entry is
+  // what a hand edit could have written, so it is normalised before anything
+  // sends a credential to it.
+  property var jmapSettings: null
   // Only the mailbox that predates multi-account may claim the old
   // client-keyed refresh token. See AuthManager.mayAdoptLegacyToken.
   property bool mayAdoptLegacyToken: true
@@ -99,28 +104,58 @@ Item {
   readonly property var api: apiLoader.item
   readonly property alias cache: cacheStore
 
+  // What *this account* takes back from what its provider declares, and the
+  // rail rows it has no mailbox for: two servers of one kind can differ, so the
+  // provider list is a ceiling the client withdraws from. A client exposing
+  // neither (Gmail, HEY, IMAP) leaves every answer at the ceiling.
+  //
+  // Both are null between clients and until the mailboxes are read, so the
+  // ceiling is the default: a press against a mailbox since gone lands on the
+  // client's own refusal at request time.
+  readonly property var capabilityRefusals: api ? api.refusals : null
+  readonly property var absentMailboxes: api ? api.absentMailboxes : null
+
+  // Whether the client says the stored credential was refused. Only the
+  // providers whose credential can be revoked out from under them raise it —
+  // one whose client never declares it reads as false, which is what it was
+  // before this existed. It is not a sign-out: the account, its server and its
+  // cache are all still right, and the setup page draws the re-entry.
+  readonly property bool credentialsRejected: !!api && api.credentialsRejected === true
+
   // The mailboxes this account has, which is a property of its provider rather
   // than of the panel. The sidebar and the tab row draw whatever is here.
-  readonly property var mailboxes: Provider.mailboxes(providerId)
+  readonly property var mailboxes: Provider.mailboxes(providerId, absentMailboxes)
 
   // What the panel may offer for this account. A button the service cannot
   // honour is worse than a missing one: it fails after the user has committed
   // to it, with the row already moved.
-  readonly property bool canArchive: Provider.can(providerId, "archive")
-  readonly property bool canReportSpam: Provider.can(providerId, "spam")
-  readonly property bool canStar: Provider.can(providerId, "star")
+  readonly property bool canArchive: Provider.can(providerId, "archive", capabilityRefusals)
+  readonly property bool canReportSpam: Provider.can(providerId, "spam", capabilityRefusals)
+  readonly property bool canStar: Provider.can(providerId, "star", capabilityRefusals)
+  readonly property bool canMove: Provider.can(providerId, "move", capabilityRefusals)
   readonly property bool hasLabels: Provider.can(providerId, "labels")
   readonly property bool canOpenOnWeb: Provider.can(providerId, "web")
   // A different question from the one above: whether *this mailbox*, as it is
   // filtered right now, has an address in the provider's web app at all.
   readonly property bool canOpenWebInbox: Provider.can(providerId, "webBox")
-  readonly property bool canSend: Provider.can(providerId, "send")
+  readonly property bool canSend: Provider.can(providerId, "send", capabilityRefusals)
+  // Whether a row here stands for a conversation rather than for one message.
+  // Not a button and not refinable per account: it decides what a row draws,
+  // and grouping is a panel rule gated on the capability rather than anything a
+  // client does on its own. Every provider that declares it hands back the
+  // block the row draws from; the ones that do not report a count of 0 and the
+  // row draws nothing new.
+  readonly property bool showsConversations: Provider.can(providerId, "conversations")
+  // The refined answers again, keyed by the capability names
+  // `Model.actionCapability` speaks, so the hint row and the guard in `act`
+  // read one answer rather than each asking the registry its own way.
+  readonly property var actionCapabilities: ({
+    archive: canArchive, star: canStar, spam: canReportSpam, move: canMove })
   // The key-bound actions this mailbox cannot honour, for the hint row. The
   // buttons are hidden by the three properties above; the keys are bound
   // whatever provider is open, so the row that says what the keyboard does here
   // has to be told as well.
-  readonly property var unavailableActions: Model.unavailableActions({
-    archive: canArchive, star: canStar, spam: canReportSpam })
+  readonly property var unavailableActions: Model.unavailableActions(actionCapabilities)
 
   // What the cache is keyed on. The page size is part of it: the same query at
   // a different size is a different result set, not a stale one.
@@ -224,6 +259,40 @@ Item {
   // do — those clear themselves after a few seconds, and this is the answer to
   // a question the user may look back at the message to ask.
   property string unsubscribeDone: ""
+
+  // ------------------------------------------------------- the conversation
+
+  // The conversation the reader is inside, as a `thread` block, or null.
+  //
+  // Held rather than read off `selectedMessage` on every frame, because a
+  // member opened on its own carries no block at all: a detail read is one
+  // message and says nothing about the thread it belongs to. Walking the rail
+  // would empty it otherwise, one stop at a time. `Conversation.threadAfterSelect`
+  // is the whole rule — a member of the held conversation keeps it, anything
+  // else replaces it with its own.
+  property var selectedThread: null
+
+  // Every member of a conversation whose summary is known, by message id.
+  //
+  // Seeded on select from the rows the list already drew and filled from the
+  // server for the members it did not — a sent reply, a message a filter moved
+  // to a user folder — through the client's `getSummaries`. Kept across selects
+  // inside one conversation, so walking the rail re-reads nothing and a member
+  // opened once is a settled stop the next time its conversation is opened.
+  property var memberSummaries: ({})
+  property var memberHandle: null
+
+  // Whether the reader is looking at a mailbox at all. A typed search is a view
+  // of the account and a label or folder is a mailbox the rail has no row for,
+  // so in both every member says where it sits.
+  readonly property bool viewingSearch: searchQuery !== "" || rawQuery !== ""
+  readonly property string viewedMailboxKey:
+    Conversation.viewedMailboxKey(mailboxKey, viewingSearch)
+  // What the rail draws, decided here rather than in the reader: whether the
+  // provider collapses its listing at all is an account fact, and a conversation
+  // of one has nowhere to go.
+  readonly property bool showsRail:
+    Conversation.drawsRail(showsConversations, selectedThread)
 
   // Parsed trees are expensive and immutable after sanitize returns. Keep only
   // the recent working set in memory; the durable cache remains the sender's
@@ -974,16 +1043,19 @@ Item {
     detailLoading = true
     detailPainted = false
 
-    // The reader opens on what the list already knows — sender, subject, date,
-    // flags — rather than on a skeleton. The row *is* a summary, and it is the
-    // same shape the live read produces.
-    //
-    // Without this the body cache was invisible: a message opened before had
-    // its body painted from disk in a few milliseconds, and then sat behind the
-    // loading state until the network answered, because the skeleton was gated
-    // on there being no summary and only the live payload ever set one.
-    var knownSummary = Model.messageById(messages, previewMessages, messageId)
+    // The reader opens on what the list already knows rather than a skeleton:
+    // the row *is* a summary of the shape the live read produces. Without this
+    // a body painted from the disk cache in milliseconds sat behind the
+    // loading state until the network answered. A conversation member is not a
+    // row, but the rail holds its summary, and the header paints from that.
+    var knownSummary = summaryOf(messageId)
     if (knownSummary) selectedMessage = knownSummary
+    // Which conversation the reader is now inside, and the stops it draws.
+    // Decided from the row rather than from the read, because `memberIds` is
+    // known the moment a row is opened and no summary is — so the rail draws a
+    // skeleton stop per id at once and nothing moves when the summaries land.
+    selectedThread = Conversation.threadAfterSelect(selectedThread, messageId, knownSummary)
+    loadMembers()
 
     // A message that has been opened before opens from its file, usually well
     // before Gmail answers. The read is asynchronous, so the live copy can win
@@ -1077,10 +1149,81 @@ Item {
       root.loadInvite(messageId, serial, Calendar.pendingPart(payload.payload), record)
       root.messages = Model.replaceById(root.messages, summary)
       root.previewMessages = Model.replaceById(root.previewMessages, summary)
+      // A message opened from somewhere other than its own row — a notification,
+      // a member whose summary had not arrived when it was asked for — brings
+      // its conversation with the read rather than before it.
+      root.selectedThread =
+        Conversation.threadAfterSelect(root.selectedThread, messageId, summary)
+      root.rememberMember(summary)
+      root.loadMembers()
       // Opening a message is the one place Gmail's own clients mark it read
       // without being asked, and a reader that leaves it bold is confusing.
       if (summary.unread) root.act(messageId, "markRead", true)
     })
+  }
+
+  // ---------------------------------------------------------- the rail
+
+  // Summaries into the store the rail draws from, bounded — and the members of
+  // the conversation on screen kept through the bound's reset, because the read
+  // that tips the store over is usually the one for the rail being drawn.
+  function mergeMembers(additions) {
+    var open = Conversation.blockOf(selectedThread)
+    memberSummaries = Conversation.mergedSummaries(memberSummaries, additions,
+      Conversation.MAX_REMEMBERED, open ? open.memberIds : [])
+  }
+
+  // One summary the rail can draw a stop from, kept by its own id.
+  function rememberMember(summary) {
+    if (!summary || !summary.id) return
+    var added = ({})
+    added[summary.id] = summary
+    mergeMembers(added)
+  }
+
+  // The summaries the open conversation still owes, asked for in one read.
+  // Seeded from what is on hand — the representative is a row the list drew,
+  // a member opened before is still in the store — so only the rest goes to
+  // the server and moving along a rail costs nothing after the first stop.
+  // Only a provider that collapses its listing has anything to say here; the
+  // others report a count of 0, which never gets this far.
+  function loadMembers() {
+    if (!showsRail || !api) return
+    var ids = Conversation.blockOf(selectedThread).memberIds
+    var seeded = ({})
+    for (var i = 0; i < ids.length; i++) {
+      if (memberSummaries[ids[i]]) continue
+      var known = Model.messageById(messages, previewMessages, ids[i])
+      if (known) seeded[ids[i]] = known
+    }
+    mergeMembers(seeded)
+
+    var wanted = Conversation.missingMemberIds(selectedThread, memberSummaries)
+    if (wanted.length === 0) return
+    abortRequest(memberHandle)
+    memberHandle = api.getSummaries(wanted, function(payloads, error) {
+      root.memberHandle = null
+      // A member the read did not answer for stays the skeleton it already
+      // was, which is what a stop with no summary draws. Nothing is retried:
+      // the rail is complete in `memberIds` from the moment the row was read,
+      // and only the lanes inside a stop are ever waiting.
+      if (error || !payloads || payloads.length === 0) return
+      var arrived = ({})
+      var now = new Date()
+      for (var j = 0; j < payloads.length; j++) {
+        var summary = Mail.summarize(payloads[j], now)
+        if (summary.id !== "") arrived[summary.id] = summary
+      }
+      root.mergeMembers(arrived)
+    })
+  }
+
+  // A member's summary after an action on it, so the rail's stop agrees with
+  // what was just done to the message the reader is showing.
+  function applyMemberChange(messageId, action) {
+    var summary = memberSummaries[messageId]
+    if (!summary) return
+    rememberMember(Model.applyLabelChange(summary, action))
   }
 
   // The invitation the message pointed at. Nothing happens for the messages
@@ -1237,6 +1380,12 @@ Item {
     selectedUnsubscribe = null
     unsubscribeDone = ""
     detailLoading = false
+    // The rail goes with the reader. The member summaries do not: they are a
+    // cache of what has been read, and closing one conversation is no reason to
+    // pay for the next one twice.
+    selectedThread = null
+    abortRequest(memberHandle)
+    memberHandle = null
   }
 
   // The cursor is the list's own position and moves relative to itself.
@@ -1249,11 +1398,13 @@ Item {
 
   // `quiet` rides along because it decides whether the row may be evicted from
   // under an open reader. A queued explicit trash that ran as if it were quiet
-  // would leave the message the user deleted still on screen.
-  function queueAction(messageId, action, actionQuery, quiet) {
+  // would leave the message the user deleted still on screen. A rail stop's
+  // single-message scope must survive the wait even when its id is also a row.
+  function queueAction(messageId, action, actionQuery, quiet, memberOnly) {
     queuedActions = Model.enqueueAction(queuedActions, {
       id: messageId, action: action, cacheKey: actionQuery,
-      sourceLabelId: hasLabels ? rawLabelId : "", quiet: quiet === true
+      sourceLabelId: hasLabels ? rawLabelId : "", quiet: quiet === true,
+      memberOnly: memberOnly === true
     })
   }
 
@@ -1269,9 +1420,9 @@ Item {
     // does not change the operation already accepted for the original view.
     if (cacheKey === request.cacheKey
         && (hasLabels ? rawLabelId : "") === request.sourceLabelId
-        && (Model.indexById(messages, request.id) >= 0
-        || Model.indexById(previewMessages, request.id) >= 0)) {
-      act(request.id, request.action, request.quiet)
+        && (Model.rowIndexForMember(messages, request.id) >= 0
+        || Model.rowIndexForMember(previewMessages, request.id) >= 0)) {
+      act(request.id, request.action, request.quiet, request.memberOnly)
       return
     }
 
@@ -1323,15 +1474,23 @@ Item {
   // Every action moves the list immediately and reconciles afterwards. Waiting
   // for Google before the row moves makes the panel feel broken on a slow
   // connection, and the failure path puts the row back.
+  //
+  // Read from the booleans the buttons were drawn from, not the registry
+  // again: an account may refuse what its provider declares. The account's own
+  // reason is preferred — "This account has no Archive mailbox" says more than
+  // "IMAP has no archive" when a neighbour of the same kind archives fine.
   function refuseUnavailableAction(action) {
     var needs = Model.actionCapability(action)
-    if (needs === "" || Provider.can(providerId, needs)) return false
-    note(Model.actionUnavailable(action, Provider.badge(providerId)))
+    if (needs === "" || actionCapabilities[needs] === true) return false
+    var refused = Provider.refusal(providerId, needs, capabilityRefusals)
+    note(refused !== "" ? refused : Model.actionUnavailable(action, Provider.badge(providerId)))
     return true
   }
 
-  function act(id, action, quiet) {
+  // `memberOnly` is the rail's: a stop names its one message, not the row's.
+  function act(id, action, quiet, memberOnly) {
     var messageId = String(id || "")
+    var oneMessage = memberOnly === true
     if (!ready || messageId === "") return false
     // Before the optimistic update, not after it. A key is not a button: `e`
     // and `s` are bound in every mail context, so an action the provider cannot
@@ -1347,12 +1506,32 @@ Item {
     // failure the user had not caused, and — because `act` answered false —
     // stopped the cursor moving on. Queue it and run it when the slot frees.
     if (pendingAction !== "") {
-      queueAction(messageId, action, cacheKey, quiet === true)
+      queueAction(messageId, action, cacheKey, quiet === true, oneMessage)
       return true
     }
     var index = Model.indexById(messages, messageId)
     var previewIndex = Model.indexById(previewMessages, messageId)
-    if (index < 0 && previewIndex < 0) return false
+    // A counted member is not a row, and it is still found by one. The list is
+    // one row per conversation, so every stop on the rail but the
+    // representative's is a message the list never drew — and an action on one
+    // has a row to move, a summary to update and a block to recompute all the
+    // same. Own ids are matched first, so this only ever runs for a member.
+    var memberAction = index < 0 && previewIndex < 0
+    if (memberAction) {
+      index = Model.rowIndexForMember(messages, messageId)
+      previewIndex = Model.rowIndexForMember(previewMessages, messageId)
+    }
+    // No row anywhere: the reader is inside a conversation whose row the list
+    // has navigated away from or has already moved. There is nothing to move,
+    // so the optimistic update is the member's own summary — which is what the
+    // rail draws — and only a message-scoped label change goes out: the quiet
+    // mark-read, star or unstar. Automatic reads also need rollback on failure.
+    if (index < 0 && previewIndex < 0) {
+      if (!Conversation.holdsMember(selectedThread, messageId)) return false
+      var memberChange = Model.labelChangesFor(action)
+      if (!memberChange) return false
+      return actOnDetachedMember(messageId, action, memberChange, quiet)
+    }
     var actionQuery = cacheKey
     var actionEstimate = resultEstimate
     var actionToken = nextPageToken
@@ -1375,20 +1554,99 @@ Item {
       actionToken = ""
     }
     var before = index >= 0 ? messages[index] : previewMessages[previewIndex]
+    var rowId = String(before.id || "")
     var sourceLabelId = hasLabels ? rawLabelId : ""
-    var updated = Model.applyLabelChange(before, action, sourceLabelId)
-    var survives = Model.survivesAction(mailboxKey, action, rawQuery, hasLabels,
-      sourceLabelId)
 
-    if (action === "markRead" && before.unread) inboxUnread = Math.max(0, inboxUnread - 1)
-    if (action === "markUnread" && !before.unread) inboxUnread = inboxUnread + 1
+    // The messages this action is sent for. Expansion is the row's and it
+    // happens here: a conversation-scoped verb reaches every counted member and
+    // the client is handed the flat list, so no client expands anything and
+    // `Thread/get` is never called for an action. A member action names the one
+    // message, and so does the quiet mark-read on opening — the reader shows
+    // one message, so one has been read, and the other unread members keep
+    // their accent nodes, which is what the rail is for.
+    var targets = memberAction || oneMessage || quiet === true
+      ? [messageId] : Model.actionTargets(before, action)
+    if (targets.length === 0) return false
+
+    // Every summary the update touches besides the row's own, and what it was.
+    // The rail draws from these, so a conversation action asserts the whole
+    // conversation across them and the restore behind it puts them back.
+    var memberBefore = ({})
+    var memberAfter = ({})
+    var changedMembers = []
+    function rememberBefore(id, summary) {
+      if (changedMembers.indexOf(id) < 0) {
+        changedMembers.push(id)
+        memberBefore[id] = summary
+      }
+    }
+    for (var t = 0; t < targets.length; t++) {
+      var known = memberSummaries[targets[t]]
+      if (!known) continue
+      var after = Model.applyLabelChange(known, action, sourceLabelId)
+      if (!after || after === known) continue
+      rememberBefore(targets[t], known)
+      memberAfter[targets[t]] = after
+    }
+
+    // Only an action that reached every counted member may speak for the
+    // conversation. The quiet mark-read on opening is message-scoped even on a
+    // representative — one message has been read, not the thread — so it takes
+    // the recomputation below with the rest.
+    var conversationAction = !memberAction && !oneMessage && quiet !== true
+      && Model.actionScope(action) === "conversation"
+    var updated
+    if (conversationAction) {
+      // A conversation action asserts the block outright: every counted member
+      // was sent the same patch, so the row says so at once rather than waiting
+      // for the next read to agree.
+      updated = Model.applyLabelChange(before, action, sourceLabelId,
+        Model.threadAfterAction(before, action))
+    } else {
+      // One message changed, so the block is recomputed from the members
+      // rather than asserted. An unknown member never flips a flag off, which
+      // is what keeps a row in the Unread view while a reply nobody has read is
+      // still in it — and what stops the quiet mark-read on opening a thread
+      // from clearing the dot of every other member with it.
+      var ownLabels = memberAction ? before
+        : Model.applyLabelChange(before, action, sourceLabelId)
+      var nextMembers = ({})
+      for (var held in memberSummaries) nextMembers[held] = memberSummaries[held]
+      for (var changed in memberAfter) nextMembers[changed] = memberAfter[changed]
+      // The representative's own new state is evidence whether or not the rail
+      // ever drew it, so it goes in rather than counting as an unknown member.
+      if (!memberAction) nextMembers[rowId] = ownLabels
+      updated = Model.rowWithThread(ownLabels,
+        Model.threadAfterMemberChange(before, nextMembers))
+    }
+    // A representative is a row and a stop at once, so it changes in both
+    // places or the rail contradicts the list it was opened from. Its own
+    // summary is the row's, block and all, rather than the member label change
+    // computed above.
+    if (memberSummaries[rowId]) {
+      rememberBefore(rowId, memberSummaries[rowId])
+      memberAfter[rowId] = updated
+    }
+    if (changedMembers.length > 0) mergeMembers(memberAfter)
+
+    // The recomputed row is what decides whether it stays: a mark-read in the
+    // Unread view keeps the row while any member is still unread.
+    var survives = Model.survivesAction(mailboxKey, action, rawQuery, hasLabels,
+      sourceLabelId, updated)
+
+    if (action === "markRead" && before.unread && !updated.unread)
+      inboxUnread = Math.max(0, inboxUnread - 1)
+    if (action === "markUnread" && !before.unread && updated.unread)
+      inboxUnread = inboxUnread + 1
 
     // An action the user did not ask for must never move them. Opening an
     // unread message marks it read, and being read is the very thing that
     // disqualifies it from the unread list — so evicting it there would close
     // the reader that the click had just opened. The row stays until the list
     // is next loaded, which is also what Gmail's own clients do.
-    var keepOpen = quiet === true && selectedId === messageId
+    // The keep-open rule reads the conversation too: the reader is showing the
+    // row or one of its members, and a quiet action must not close it.
+    var keepOpen = quiet === true && Model.rowHoldsMember(before, selectedId)
     var removed = !survives && !keepOpen
     var opaqueQuery = effectiveQuery
       !== Provider.query(providerId, mailboxKey, "", "")
@@ -1396,18 +1654,23 @@ Item {
     if (invalidatesPage) nextPageToken = ""
 
     if (index >= 0) {
-      if (removed) messages = Model.removeById(messages, messageId)
+      if (removed) messages = Model.removeById(messages, rowId)
       else messages = Model.replaceById(messages, updated)
       if (interruptedQuery === "") rememberList()
     }
     if (previewIndex >= 0) {
       previewMessages = updated.unread
         ? Model.replaceById(previewMessages, updated)
-        : Model.removeById(previewMessages, messageId)
+        : Model.removeById(previewMessages, rowId)
     }
-    if (selectedId === messageId) {
+    var selectedBefore = selectedMessage
+    var selectedWas = selectedId
+    if (Model.rowHoldsMember(before, selectedId)) {
       if (removed) clearSelection()
-      else selectedMessage = updated
+      else if (selectedId === rowId) selectedMessage = updated
+      else if (memberAfter[selectedId]) selectedMessage = memberAfter[selectedId]
+      else if (targets.indexOf(selectedId) >= 0 && selectedMessage)
+        selectedMessage = Model.applyLabelChange(selectedMessage, action, sourceLabelId)
     }
     var optimisticMessages = messages.slice()
     var optimisticToken = nextPageToken
@@ -1437,6 +1700,12 @@ Item {
           : root.previewMessages.slice(0, previewIndex).concat(
               [before], root.previewMessages.slice(previewIndex))
       }
+      // Both halves go back: the row the list drew and every member summary
+      // the optimistic update asserted the conversation across.
+      for (var m = 0; m < changedMembers.length; m++)
+        root.rememberMember(memberBefore[changedMembers[m]])
+      if (selectedWas !== "" && root.selectedId === selectedWas)
+        root.selectedMessage = selectedBefore
       root.refreshCounts()
       root.fail(error)
     }
@@ -1487,8 +1756,12 @@ Item {
         root.loadMessages(false, true, "")
     }
 
-    if (action === "trash") api.trashMessage(messageId, done)
-    else if (action === "untrash") api.untrashMessage(messageId, done)
+    // One id or many, and the interface keeps its fifteen names: `trashMessage`
+    // and `untrashMessage` take either on every client, and a list of more than
+    // one goes to `batchModify` rather than to a call per message.
+    var sent = targets.length > 1 ? targets : targets[0]
+    if (action === "trash") api.trashMessage(sent, done)
+    else if (action === "untrash") api.untrashMessage(sent, done)
     else {
       var change = Model.labelChangesFor(action, sourceLabelId)
       if (!change) {
@@ -1496,8 +1769,40 @@ Item {
         pendingActionQuery = ""
         return false
       }
-      api.modifyMessage(messageId, change.add, change.remove, done)
+      if (targets.length > 1) api.batchModify(targets, change.add, change.remove, done)
+      else api.modifyMessage(targets[0], change.add, change.remove, done)
     }
+    return true
+  }
+
+  // A member whose row is not in either list, acted on deliberately: the
+  // reader can outlive the row it was opened from, and star and unstar still
+  // belong to the message on screen. With no row to move, the optimistic
+  // update is the member's summary and the reader's copy, and the restore puts
+  // back exactly those two. Only a message-scoped label change reaches here.
+  //
+  // `unstar` from a row clears every counted member's star (the row's star
+  // means "any member"); from the reader it clears the one message on screen.
+  function actOnDetachedMember(messageId, action, change, quiet) {
+    var beforeMember = memberSummaries[messageId] || null
+    var beforeSelected = selectedMessage
+    applyMemberChange(messageId, action)
+    if (selectedId === messageId && selectedMessage)
+      selectedMessage = Model.applyLabelChange(selectedMessage, action)
+    pendingActionQuery = cacheKey
+    pendingAction = action
+    api.modifyMessage(messageId, change.add, change.remove, function(payload, error) {
+      root.pendingAction = ""
+      root.pendingActionQuery = ""
+      if (error) {
+        if (beforeMember) root.rememberMember(beforeMember)
+        if (root.selectedId === messageId) root.selectedMessage = beforeSelected
+        root.fail(error)
+        return
+      }
+      if (quiet !== true) root.note(root.actionLabel(action))
+      root.refreshCounts()
+    })
     return true
   }
 
@@ -1536,6 +1841,18 @@ Item {
     return "Done"
   }
 
+  // The star of whatever this id is: a row, or a member of one open in the
+  // reader. A member has no row of its own — the list is one row per
+  // conversation — so looking only in `messages` made the reader's star a
+  // silent no-op on every stop but the representative's. What the button draws
+  // is what it toggles: a row's star is the conversation's, a member's is the
+  // one message's, and `act` sends each to the scope its verb has.
+  function summaryOf(id) {
+    var known = Model.messageById(messages, previewMessages, id)
+    if (known) return known
+    return memberSummaries[String(id || "")] || null
+  }
+
   // A label id is what the provider wants and what the caches key on; a name
   // is what the person who pressed `v` picked. Falling back to the id keeps a
   // note honest when the label list has not arrived rather than printing
@@ -1547,15 +1864,15 @@ Item {
   }
 
   function toggleStar(id) {
-    var index = Model.indexById(messages, id)
-    if (index < 0) return
-    act(id, messages[index].starred ? "unstar" : "star")
+    var summary = summaryOf(id)
+    if (!summary) return
+    act(id, summary.starred ? "unstar" : "star")
   }
 
   function toggleRead(id) {
-    var index = Model.indexById(messages, id)
-    if (index < 0) return
-    act(id, messages[index].unread ? "markRead" : "markUnread")
+    var summary = summaryOf(id)
+    if (!summary) return
+    act(id, summary.unread ? "markRead" : "markUnread")
   }
 
   function markAllRead() {
@@ -1564,9 +1881,21 @@ Item {
       note("Another action is still finishing")
       return false
     }
+    // Every unread row expanded into one flat batch, which the client chunks.
+    // Every counted member is sent rather than only the unread ones: the row
+    // does not know which members are unread, a redundant patch is harmless,
+    // and asking would cost a read per row.
     var ids = []
+    var rows = 0
+    var expanded = false
     for (var i = 0; i < messages.length; i++) {
-      if (messages[i].unread) ids.push(messages[i].id)
+      if (!messages[i].unread) continue
+      rows = rows + 1
+      var targets = Model.actionTargets(messages[i], "markRead")
+      if (targets.length > 1) expanded = true
+      for (var t = 0; t < targets.length; t++) {
+        if (ids.indexOf(targets[t]) < 0) ids.push(targets[t])
+      }
     }
     if (ids.length === 0) return false
     var actionQuery = cacheKey
@@ -1582,8 +1911,36 @@ Item {
       nextPageToken = ""
       actionToken = ""
     }
+    // The block is asserted on every row for the same reason one action asserts
+    // it: a row whose members were all sent the patch is a read conversation,
+    // and a row that recomputed only its own labels would stay bold because its
+    // block still said unread.
     var next = []
-    for (var j = 0; j < messages.length; j++) next.push(Model.applyLabelChange(messages[j], "markRead"))
+    for (var j = 0; j < messages.length; j++) {
+      next.push(Model.applyLabelChange(messages[j], "markRead", "",
+        Model.threadAfterAction(messages[j], "markRead")))
+    }
+    // The rail draws from `memberSummaries` and the reader from
+    // `selectedMessage`, and both are among what was just marked: every member
+    // this holds a summary for takes the change, and a representative takes
+    // its row's, block and all. Left alone, a stop kept its dot for the rest
+    // of the session, because nothing later re-reads a member it already has.
+    var memberBefore = memberSummaries
+    var memberAfter = ({})
+    for (var m = 0; m < ids.length; m++) {
+      var held = memberSummaries[ids[m]]
+      if (held) memberAfter[ids[m]] = Model.applyLabelChange(held, "markRead")
+    }
+    for (var r = 0; r < next.length; r++) {
+      if (memberSummaries[next[r].id]) memberAfter[next[r].id] = next[r]
+    }
+    mergeMembers(memberAfter)
+    var selectedBefore = selectedMessage
+    var selectedWas = selectedId
+    if (selectedMessage && ids.indexOf(selectedId) >= 0) {
+      selectedMessage = memberAfter[selectedId]
+        || Model.applyLabelChange(selectedMessage, "markRead")
+    }
     var survives = Model.survivesAction(mailboxKey, "markRead")
     var opaqueQuery = effectiveQuery
       !== Provider.query(providerId, mailboxKey, "", "")
@@ -1611,13 +1968,17 @@ Item {
             nextPageToken: actionToken
           }))
         }
+        // The rail and the reader go back with the rows, unless the reader
+        // has moved on to something this never touched.
+        root.memberSummaries = memberBefore
+        if (root.selectedId === selectedWas) root.selectedMessage = selectedBefore
         root.fail(error)
         if (root.resumeDeferredListLoad(actionQuery, error)) return
         if (interrupted && root.cacheKey === actionQuery)
           root.loadMessages(false, true, error)
         return
       }
-      root.note(Model.pluralize(ids.length, "message") + " marked read")
+      root.note(Model.markAllReadNote(rows, expanded))
       root.refreshCounts()
       if (interrupted && root.deferredLoadCleared(actionQuery)
           && root.cacheStore.loaded) {
@@ -1892,6 +2253,9 @@ Item {
     var payload = Mail.buildSendPayload({
       from: from,
       fromName: alias ? String(alias.displayName || "") : "",
+      // What the generated Message-ID takes its domain from when the draft
+      // names no From of its own.
+      accountAddress: ownAddress,
       to: String(values.to || "").trim(),
       cc: String(values.cc || "").trim(),
       bcc: String(values.bcc || "").trim(),
@@ -1900,9 +2264,9 @@ Item {
       attachments: Array.isArray(values.attachments) ? values.attachments : [],
       threadId: values.threadId,
       inReplyTo: values.inReplyTo,
-      references: values.references
+      references: values.references,
+      draftId: String(values.draftId || "")
     })
-    payload.draftId = String(values.draftId || "")
     return api.saveDraft(payload, function(saved, error) {
       if (typeof callback === "function") callback(saved, error)
     })
@@ -1938,6 +2302,9 @@ Item {
     var payload = Mail.buildSendPayload({
       from: from,
       fromName: alias ? String(alias.displayName || "") : "",
+      // What the generated Message-ID takes its domain from when the compose
+      // window states no From and the provider fills one in for itself.
+      accountAddress: ownAddress,
       to: to,
       cc: String(values.cc || "").trim(),
       bcc: String(values.bcc || "").trim(),
@@ -1946,7 +2313,11 @@ Item {
       attachments: Array.isArray(values.attachments) ? values.attachments : [],
       threadId: values.threadId,
       inReplyTo: values.inReplyTo,
-      references: values.references
+      references: values.references,
+      // The draft this send replaces, carried through the undo window with the
+      // rest of the payload. Dropping it here is what left a sent message's
+      // draft behind on every provider.
+      draftId: String(values.draftId || "")
     })
 
     var queued = Outbox.schedule(payload, Date.now(), undoSendSeconds)
@@ -2007,6 +2378,7 @@ Item {
       // them would have written this one.
       from: answeringAs,
       fromName: answeringName,
+      accountAddress: ownAddress,
       to: fields.to,
       subject: fields.subject,
       body: fields.body,
@@ -2082,6 +2454,7 @@ Item {
         // an alias has no reason to act on a request from anywhere else.
         from: receivedAsAddress,
         fromName: receivedAsName,
+        accountAddress: ownAddress,
         to: info.mail.to,
         subject: info.mail.subject,
         body: info.mail.body
@@ -2468,6 +2841,15 @@ Item {
 
   signal accountIdentified(string email)
 
+  // The server settings a sign-in learned, for the account list to write onto
+  // this account's entry. The same shape as `accountIdentified`: a fact the
+  // sign-in found out that belongs on the entry, which only the list owns.
+  // This object is built *from* the entry — its `jmapSettings` come down from
+  // it — so writing here would be writing to a copy that the next read of the
+  // file replaces, and a mailbox that had signed in perfectly well would open
+  // on its setup page again after every restart.
+  signal serverSettingsLearned(var jmap)
+
   // Which pair of objects this account actually runs on. Both loaders build the
   // same two shapes — something that signs in, and something that fetches — and
   // everything above this point calls them without knowing which it holds.
@@ -2478,8 +2860,9 @@ Item {
   Loader {
     id: authLoader
     sourceComponent: root.providerId === "imap" ? imapAuthComponent
+      : (root.providerId === "jmap" ? jmapAuthComponent
       : (root.providerId === "outlook" ? outlookAuthComponent
-        : (root.providerId === "hey" ? heyAuthComponent : gmailAuthComponent))
+        : (root.providerId === "hey" ? heyAuthComponent : gmailAuthComponent)))
   }
 
   // The client takes the manager as a required property, so it cannot be built
@@ -2489,7 +2872,8 @@ Item {
     active: !!authLoader.item
     sourceComponent: root.providerId === "imap" || root.providerId === "outlook"
       ? imapClientComponent
-      : (root.providerId === "hey" ? heyClientComponent : gmailClientComponent)
+      : (root.providerId === "jmap" ? jmapClientComponent
+        : (root.providerId === "hey" ? heyClientComponent : gmailClientComponent))
   }
 
   Component {
@@ -2523,6 +2907,35 @@ Item {
       // user typed into the form.
       settings: Imap.normalizeSettings(root.imapSettings)
 
+      onLoginSucceeded: {
+        root.lastError = lastError
+        root.afterSignIn()
+      }
+      onLoggedOut: root.clearNotice()
+      onCredentialsSaved: root.note("Mailbox saved")
+      onSessionUnavailable: function(reason) { root.fail(reason) }
+    }
+  }
+
+  Component {
+    id: jmapAuthComponent
+
+    JmapAuth {
+      pluginDir: root.pluginDir
+      accountId: root.accountId
+      // Discovery runs from the address's domain when no server was typed, so
+      // the address is part of this object's input rather than something it
+      // learns afterwards.
+      address: root.configuredEmail
+      settings: Accounts.makeJmapSettings(root.jmapSettings)
+
+      // The URL that answered, the scheme that worked and the account id, over
+      // the settings this object was given. Up to the list rather than onto
+      // this object: `configured` reads `settings`, and `settings` is bound to
+      // the entry, so the entry is the only place the answer can land and stay.
+      onSessionVerified: function(result) {
+        root.serverSettingsLearned(Accounts.jmapSettingsAfterSignIn(settings, result))
+      }
       onLoginSucceeded: {
         root.lastError = lastError
         root.afterSignIn()
@@ -2583,6 +2996,30 @@ Item {
     ImapClient {
       auth: authLoader.item
       email: root.configuredEmail
+    }
+  }
+
+  Component {
+    id: jmapClientComponent
+    JmapClient {
+      auth: authLoader.item
+      email: root.configuredEmail
+      // The session object is the server's answer rather than the account's
+      // settings, so it is kept beside the query results rather than in
+      // accounts.json.
+      cache: cacheStore
+
+      // The one provider that is told rather than asked. The plan names which
+      // of the poll's own doors to knock on: `loadLabels()` re-reads the
+      // mailbox list and re-binds the refusals; `refresh()` brings the counts,
+      // badge, notification and list exactly as on a tick. Labels first, so a
+      // message in a mailbox the rail has never heard of is not counted
+      // against a row that is about to appear.
+      onRemoteChanged: function(plan) {
+        if (!root.ready || !plan) return
+        if (plan.mailboxes) root.loadLabels()
+        if (plan.mail) root.refresh()
+      }
     }
   }
 

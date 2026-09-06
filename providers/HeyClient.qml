@@ -298,6 +298,21 @@ Item {
     return handle
   }
 
+  // The counted members of a conversation, for the reader's conversation rail.
+  //
+  // Always empty, and HEY is never asked: a HEY row already *is* a conversation
+  // and carries no member ids, so its `thread` block reports a count of 0 —
+  // unknown — and the rail draws nothing. The body on screen is the whole
+  // conversation here, which is the thing the rail would otherwise be for.
+  function getSummaries(ids, callback) {
+    var handle = newHandle()
+    Qt.callLater(function() {
+      if (!root || handle.aborted || typeof callback !== "function") return
+      callback([], "")
+    })
+    return handle
+  }
+
   // A whole page with no round trips at all: the listing that produced these
   // ids carried every field a row needs, so this is the cache answering.
   //
@@ -511,12 +526,17 @@ Item {
     return act(verb, ids, callback)
   }
 
+  // One id or a list of them. A HEY message id is `<posting>:<topic>`, and a
+  // conversation's members all share the topic — so a list arriving from a row
+  // that stands for a conversation can name the same posting more than once.
+  // `Cli.actionCommand` already keeps each posting once, which is why the list
+  // is handed straight to it rather than wrapped in another array.
   function trashMessage(id, callback) {
-    return act("trash", [id], callback)
+    return act("trash", Array.isArray(id) ? id : [id], callback)
   }
 
   function untrashMessage(id, callback) {
-    return act("untrash", [id], callback)
+    return act("untrash", Array.isArray(id) ? id : [id], callback)
   }
 
   // One verb, however many threads: every HEY command takes a list of ids, so a

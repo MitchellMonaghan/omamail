@@ -7,6 +7,7 @@ import qs.Commons
 import qs.Ui
 
 import "account/Model.js" as Model
+import "account/Conversation.js" as Conversation
 import "account/Accounts.js" as Accounts
 import "account/Navigation.js" as Nav
 import "compose/Recovery.js" as Recovery
@@ -378,9 +379,18 @@ Item {
     if (service) service.setSidebarCollapsed(!service.sidebarCollapsed)
   }
 
+  // Entered at the top. The page keeps its scroll for as long as it is in
+  // history — Back from a mailbox's form returns to the row that opened it —
+  // but a page that was left and entered again is a new visit, and one that
+  // opened where the last visit ended looked like the calendar had been
+  // opened instead of settings, because that is the section a scroll past
+  // Mailboxes lands in.
   function openSettings() {
     dismissHelp()
-    if (page !== "settings") pushEntry("settings")
+    if (page === "settings") return
+    settingsScroll.stop()
+    settingsFlick.contentY = 0
+    pushEntry("settings")
   }
 
   readonly property bool ready: !!service && service.ready
@@ -446,6 +456,33 @@ Item {
     // Back from a message means the list it came from.
     if (page !== "list" && page !== "reader") nav = Nav.resetTo(nav, "list")
     pushEntry("reader", { id: cursorId })
+  }
+
+  // One member of the conversation the reader is inside, opened in the same
+  // reader. `openMessage` and nothing else: the header paints from the member's
+  // summary at once, the body from the cache or the network, and the navigation
+  // stack replaces a reader entry with a reader entry, so Back still lands on
+  // the list from any member.
+  //
+  // The one thing that does not happen is the cursor moving. `cursorId` is
+  // where the keyboard stands in the *list*, and a member is not a row — the
+  // list is one row per conversation — so leaving the cursor on a message the
+  // list has never drawn would send the next `j` back to the top of it.
+  function openMember(id) {
+    var member = String(id || "")
+    if (!service || member === "") return
+    var cursor = cursorId
+    openMessage(member)
+    cursorId = cursor
+  }
+
+  // Along the rail by keyboard: `n` to the next member, `p` to the previous,
+  // stopping at the ends rather than wrapping. `j` and `k` keep moving the list
+  // cursor underneath, which is the other thing in this window that moves.
+  function stepMember(delta) {
+    if (!service || !service.showsRail) return
+    var next = Conversation.memberStep(service.selectedThread, service.selectedId, delta)
+    if (next !== "" && next !== service.selectedId) openMember(next)
   }
 
   function editDraft(id) {
@@ -685,15 +722,23 @@ Item {
   function actOnCursor(action) {
     if (!service || cursorId === "") return false
     var acted = cursorId
-    var wasOpen = currentView === "reader" && service.selectedId === acted
+    var row = service.messages[Model.indexById(service.messages, acted)]
+    // "Was open" is the conversation's: with the rail up the reader can be
+    // showing a member of the acted row rather than the row itself, and
+    // archiving from a member has to open the next row or go back rather than
+    // leave a message that has just moved on screen.
+    var wasOpen = currentView === "reader"
+      && (service.selectedId === acted || Model.rowHoldsMember(row, service.selectedId))
     // Worked out before the action, while the row still has neighbours.
     var next = Model.cursorAfterRemoval(service.messages, acted)
-    // The same five facts `MailAccount.act` decides with. Asking with three of
+    // The same six facts `MailAccount.act` decides with. Asking with three of
     // them made the cursor repair disagree with the list it repairs: moving a
     // message back to the inbox removes the row on a provider that moves, and
-    // this read it as staying.
+    // this read it as staying. The row itself is the sixth: a conversation
+    // answers on its recomputed block, so a mark-read in the Unread view keeps
+    // the row while a reply is still unread.
     var leaves = !Model.survivesAction(service.mailboxKey, action,
-      service.rawQuery, service.hasLabels, service.rawLabelId)
+      service.rawQuery, service.hasLabels, service.rawLabelId, row)
     if (!service.act(acted, action)) return false
     if (!leaves) return true
     // The row is going and the cursor must not go with it: a cursor on a
@@ -706,6 +751,29 @@ Item {
     }
     cursorId = next
     revealCursorRow()
+    return true
+  }
+
+  // Acting on one member from its stop on the rail: the one message and not
+  // the conversation, whichever member it is. If it was the message on screen
+  // and the action takes it out of this view, the reader moves to the
+  // neighbouring stop — the newer one above, else the older below — rather
+  // than sitting on a message that has just left; a conversation with no other
+  // stop goes back to the list, as the list's own delete does.
+  function actOnMember(action, id) {
+    var member = String(id || "")
+    if (!service || member === "") return false
+    var wasOpen = currentView === "reader" && service.selectedId === member
+    // Worked out before the action, while the member is still a stop.
+    var next = Conversation.neighbourStop(service.selectedThread, member)
+    var members = service.memberSummaries
+    var summary = members && typeof members === "object" ? members[member] : null
+    var leaves = !Model.survivesAction(service.mailboxKey, action,
+      service.rawQuery, service.hasLabels, service.rawLabelId, summary || null)
+    if (!service.act(member, action, false, true)) return false
+    if (!leaves || !wasOpen) return true
+    if (next !== "") openMember(next)
+    else backToList()
     return true
   }
 
@@ -746,12 +814,22 @@ Item {
     if (id === "cursorUp") return moveCursor(-1)
     if (id === "open") return openMessage(cursorId)
     if (id === "backToList") return backToList()
+    if (id === "nextMember") return stepMember(1)
+    if (id === "previousMember") return stepMember(-1)
     if (id === "archive") return actOnCursor("archive")
     if (id === "trash") return actOnCursor("trash")
     // Through the same guard actOnCursor applies rather than around it:
     // starring with nothing selected used to call through with an empty id.
+    //
+    // In the reader the star is the open message's own. Every reader action
+    // resolves through the selected id and every list action through the
+    // cursor, and this is the key where the difference shows: the cursor stays
+    // on the row while `n` and `p` walk the rail, so `s` would otherwise star
+    // the representative rather than the message on screen.
     if (id === "star") {
-      if (service && cursorId !== "") service.toggleStar(cursorId)
+      var starred = currentView === "reader" && service && service.selectedId !== ""
+        ? service.selectedId : cursorId
+      if (service && starred !== "") service.toggleStar(starred)
       return
     }
     if (id === "moveToLabel") return openLabelPicker()
@@ -934,6 +1012,21 @@ Item {
     id: outlookSetupPage
 
     OutlookSetupPage {
+      service: root.service
+      textColor: root.foreground
+      dimColor: root.dim
+      dangerColor: root.danger
+      accentColor: root.accent
+      panelFontFamily: root.fontFamily
+      accountCount: root.service ? root.service.accountCount : 1
+      onRemoveRequested: root.removeCurrentAccountFromEditor()
+    }
+  }
+
+  Component {
+    id: jmapSetupPage
+
+    JmapSetupPage {
       service: root.service
       textColor: root.foreground
       dimColor: root.dim
@@ -1491,15 +1584,31 @@ Item {
           onZoomRequested: function(step) { root.zoomBy(step) }
           onZoomResetRequested: if (root.service) root.service.setBodyZoom(1.0)
           onBackRequested: root.back()
+          onMemberRequested: function(id) { root.openMember(id) }
+          onMemberMenuRequested: function(id, sceneX, sceneY) {
+            rowMenu.openForMember(id, sceneX, sceneY)
+          }
           onComposeRequested: function(mode) { root.startCompose(mode) }
           onMailtoRequested: function(url) {
             root.openDraft(Mailto.parse(url))
           }
           onActionRequested: function(action) {
-            if (root.service && root.service.selectedId !== "") {
+            if (!root.service || root.service.selectedId === "") return
+            // The toolbar acts on the message it is under, which is normally
+            // the row the cursor is on — but with the rail up the reader can be
+            // showing a *member*, and the list has no row for one. Moving the
+            // cursor onto it would leave `j` unable to find where it stands, so
+            // the cursor is only followed to a message the list actually drew;
+            // from a member the action lands on the row the conversation was
+            // opened from, which is where the reader came from. Which members
+            // an action reaches from there is "Actions on a conversation row".
+            // The toolbar emits archive and trash and nothing else; the star
+            // is a button of its own, through `toggleStar`, which acts on the
+            // open message.
+            if (!Conversation.holdsMember(root.service.selectedThread,
+                root.service.selectedId) || root.cursorId === "")
               root.cursorId = root.service.selectedId
-              root.actOnCursor(action)
-            }
+            root.actOnCursor(action)
           }
         }
 
@@ -1660,8 +1769,9 @@ Item {
             sourceComponent: root.showPicker
               ? providerPickerPage
               : (setup.kind === "imap" ? imapSetupPage
+                : (setup.kind === "jmap" ? jmapSetupPage
                 : (setup.kind === "outlook" ? outlookSetupPage
-                  : (setup.kind === "hey" ? heySetupPage : gmailSetupPage)))
+                  : (setup.kind === "hey" ? heySetupPage : gmailSetupPage))))
           }
           }
         }
@@ -2076,6 +2186,7 @@ Item {
 
       MessageMenu {
         id: rowMenu
+        objectName: "rowMenu"
         service: root.service
         textColor: root.foreground
         urgentColor: root.urgent
@@ -2092,6 +2203,14 @@ Item {
           root.cursorId = id
           root.actOnCursor(action)
         }
+        // From a stop on the rail. A member is not a row, so the cursor stays
+        // where the list has it and the action reaches the one message.
+        onMemberComposeRequested: function(mode, id) {
+          root.pendingComposeReturnTo = Nav.depth(root.nav)
+          root.openMember(id)
+          root.startCompose(mode)
+        }
+        onMemberActionRequested: function(action, id) { root.actOnMember(action, id) }
       }
 
       ShortcutHelp {

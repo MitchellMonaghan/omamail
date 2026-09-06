@@ -344,17 +344,13 @@ Item {
       return
     }
 
-    var updated = Accounts.emptyList()
-    updated.activeId = accountList.activeId
-    for (var i = 0; i < accounts.length; i++) {
-      // Everything but the address is carried over rather than listed field by
-      // field: a rebuild that names the fields it keeps silently drops the ones
-      // added afterwards, which is how an IMAP account would come back as a
-      // Gmail one the first time it learned its own name.
-      updated = Accounts.add(updated, i === index
-        ? withEmail(accounts[i], email) : accounts[i])
-    }
-    if (updated.activeId === "" || activeIndex === index)
+    // Everything but the address is carried over rather than listed field by
+    // field: a rebuild that names the fields it keeps silently drops the ones
+    // added afterwards, which is how an IMAP account would come back as a
+    // Gmail one the first time it learned its own name. The selection stays
+    // where it was unless this is the draft on screen, the same as a save.
+    var updated = Accounts.replaceAt(accountList, index, withEmail(accounts[index], email))
+    if (activeIndex === index)
       updated = Accounts.setActive(updated, named)
     if (activeIndex === index) activeIndex = -1
     accountList = updated
@@ -369,7 +365,9 @@ Item {
   }
 
   // What a provider setup form saves: the address, non-secret client or server
-  // configuration, and which provider this row is.
+  // configuration, and which provider this row is. Written before the secret
+  // is tried, so a mailbox that fails to sign in still has its settings to
+  // correct rather than an empty form to fill in again.
   function configureAccount(index, values) {
     var accounts = accountList.accounts
     if (index < 0 || index >= accounts.length) return
@@ -382,15 +380,15 @@ Item {
     if (raw.clientId !== undefined) entry.clientId = raw.clientId
     if (raw.clientSecret !== undefined) entry.clientSecret = raw.clientSecret
     if (raw.imap !== undefined) entry.imap = raw.imap
+    if (raw.jmap !== undefined) entry.jmap = raw.jmap
     if (raw.label !== undefined) entry.label = raw.label
 
-    var updated = Accounts.emptyList()
-    updated.activeId = accountList.activeId
-    for (var i = 0; i < accounts.length; i++)
-      updated = Accounts.add(updated, i === index ? entry : accounts[i])
-
+    // The selection stays with the row that had it — `Accounts.replaceAt`
+    // decides that — and moves to this row only when it is the draft on
+    // screen, which is addressed by position because it had no id until now.
+    var updated = Accounts.replaceAt(accountList, index, entry)
     var id = Accounts.accountId(entry.email, entry.provider)
-    if (id !== "" && (updated.activeId === "" || activeIndex === index))
+    if (id !== "" && activeIndex === index)
       updated = Accounts.setActive(updated, id)
     if (activeIndex === index) activeIndex = -1
     accountList = updated
@@ -677,6 +675,10 @@ Item {
         // falling through to the local part — so it cannot say whether
         // anything was named, and the switcher has to know the difference.
         name: String(accounts[i].label || ""),
+        // One more line about this particular mailbox, in its provider's own
+        // words. Empty for the three that have nothing to add, and the row
+        // draws it only when it is not.
+        detail: Provider.detail(accounts[i].provider, accounts[i]),
         unread: host ? host.inboxUnread : 0,
         active: host ? host.active : false,
         signedIn: host ? host.ready : false,
@@ -779,6 +781,16 @@ Item {
   readonly property var unavailableActions: current ? current.unavailableActions : []
   readonly property var savingAttachmentIds: current ? current.savingAttachmentIds : ({})
   readonly property bool canSend: !current || current.canSend
+  // Whether this account's listing is one row per conversation, and everything
+  // the reader's rail is drawn from. Forwarded like every other account fact:
+  // the views are given one object and never reach past it, so a property the
+  // facade does not name is a property the window reads as `undefined` — which
+  // is what the conversation count on a row was doing.
+  readonly property bool showsConversations: !!current && current.showsConversations
+  readonly property bool showsRail: !!current && current.showsRail
+  readonly property var selectedThread: current ? current.selectedThread : null
+  readonly property var memberSummaries: current ? current.memberSummaries : ({})
+  readonly property string viewedMailboxKey: current ? current.viewedMailboxKey : ""
   readonly property string mailboxKey: current ? current.mailboxKey : "inbox"
   readonly property string searchQuery: current ? current.searchQuery : ""
   readonly property string rawQuery: current ? current.rawQuery : ""
@@ -839,6 +851,9 @@ Item {
   readonly property string lastError: current ? current.lastError : ""
   readonly property string actionStatus: current ? current.actionStatus : ""
   readonly property string signInProgress: current ? current.signInProgress : ""
+  // Whether the mailbox on screen has had its credential refused. The setup
+  // page draws the re-entry card from this; nothing signs out over it.
+  readonly property bool credentialsRejected: !!current && current.credentialsRejected
   readonly property string syncedLabel: current ? current.syncedLabel : ""
 
   function refresh() { if (current) current.refresh() }
@@ -861,8 +876,8 @@ Item {
   function refuseUnavailableAction(action) {
     return current ? current.refuseUnavailableAction(action) : true
   }
-  function act(id, action, quiet) {
-    return current ? current.act(id, action, quiet) : false
+  function act(id, action, quiet, memberOnly) {
+    return current ? current.act(id, action, quiet, memberOnly) : false
   }
   function toggleStar(id) { if (current) current.toggleStar(id) }
   function markAllRead() { if (current) current.markAllRead() }
@@ -1091,6 +1106,7 @@ Item {
       // account's provider in the file rebuilds it as that provider.
       providerId: entry ? entry.provider : Provider.DEFAULT_ID
       imapSettings: entry ? entry.imap : null
+      jmapSettings: entry ? entry.jmap : null
       // Only a Gmail account has a client-keyed refresh token to inherit, and
       // only the first one may claim it.
       mayAdoptLegacyToken: index === 0 && (!entry || entry.provider === "gmail")
@@ -1101,6 +1117,10 @@ Item {
       alwaysShowImages: root.alwaysShowImages
 
       onAccountIdentified: function(email) { root.nameAccount(index, email) }
+      // What a JMAP sign-in learned about its server, written onto the entry
+      // the same way the setup form's own save is: the row keeps everything
+      // else it had, and the file follows.
+      onServerSettingsLearned: function(jmap) { root.configureAccount(index, { jmap: jmap }) }
       onReadyChanged: root.recount()
       onInboxUnreadChanged: root.recount()
       onReplySent: root.replySent()

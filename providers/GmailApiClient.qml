@@ -183,6 +183,25 @@ Item {
       })
   }
 
+  // The counted members of a conversation, for the reader's conversation rail.
+  //
+  // Always empty, and Gmail is never asked: it declares `threads` — a
+  // server-side thread id exists — but not `conversations`, so its listing is
+  // one row per message and no row here carries member ids for a rail to draw.
+  //
+  // Deferred rather than answered on the spot even though the answer is in
+  // hand: every caller in this interface is written against a callback that
+  // arrives later, and running one partway through the function that started it
+  // is a re-entry no other read produces.
+  function getSummaries(ids, callback) {
+    var handle = newHandle()
+    Qt.callLater(function() {
+      if (!root || handle.aborted || typeof callback !== "function") return
+      callback([], "")
+    })
+    return handle
+  }
+
   // Fetches every id at once and calls back once, with the results in the
   // order the ids were given rather than the order Google answered in. A list
   // search may also take `progress`, which receives the payloads as Google
@@ -312,18 +331,53 @@ Item {
     })
   }
 
+  // One id or a list of them: a row that stands for a conversation is trashed
+  // as its members, and the list arrives here flat.
+  //
+  // The only batch endpoint Gmail publishes is `batchModify`, which takes label
+  // ids; trash and untrash are per-message verbs of their own. Rather than
+  // guess that adding TRASH means the same thing to Google as pressing trash
+  // does, a list is one of those verbs each, answered once when the last of
+  // them has — the shape `getMessages` already uses for a page's metadata. An
+  // error on any member fails the whole batch, because a half-trashed
+  // conversation the caller was told nothing about is worse than a failed one
+  // it can put back.
   function trashMessage(id, callback) {
-    return request("POST", Api.trashPath(id), null, null,
-      function(status, payload, error) {
-        if (typeof callback === "function") callback(payload, error)
-      })
+    return trashEach(Api.trashPath, id, callback)
   }
 
   function untrashMessage(id, callback) {
-    return request("POST", Api.untrashPath(id), null, null,
-      function(status, payload, error) {
-        if (typeof callback === "function") callback(payload, error)
-      })
+    return trashEach(Api.untrashPath, id, callback)
+  }
+
+  function trashEach(pathFor, id, callback) {
+    var list = Array.isArray(id) ? id : [id]
+    if (list.length === 1) {
+      return request("POST", pathFor(list[0]), null, null,
+        function(status, payload, error) {
+          if (typeof callback === "function") callback(payload, error)
+        })
+    }
+
+    var handle = newHandle()
+    var remaining = list.length
+    var firstError = ""
+    if (remaining === 0) {
+      if (typeof callback === "function") Qt.callLater(function() { if (root) callback(null, "") })
+      return handle
+    }
+
+    for (var i = 0; i < list.length; i++) {
+      var child = request("POST", pathFor(list[i]), null, null,
+        function(status, payload, error) {
+          if (handle.aborted) return
+          if (error && !firstError) firstError = error
+          remaining--
+          if (remaining === 0 && typeof callback === "function") callback(null, firstError)
+        })
+      handle.children.push(child)
+    }
+    return handle
   }
 
   // One Timer per request in flight, created and destroyed around it. A single

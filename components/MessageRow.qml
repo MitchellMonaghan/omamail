@@ -2,6 +2,7 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "../message/Direction.js" as Direction
+import "../account/Model.js" as Model
 
 // One message in the list. Unread is carried by weight and by the dot on the
 // left, never by colour alone — the accent is a theme value that some themes
@@ -17,6 +18,10 @@ Rectangle {
   // Passed down rather than read off a service: a row draws one message and
   // has no other use for one.
   property bool canArchive: true
+  // Whether this row stands for a conversation rather than for one message.
+  // Grouping is a panel rule gated on the provider's `conversations`
+  // capability; a row is told, and asks nobody.
+  property bool conversations: false
   property bool hasCursor: false
   property bool selected: false
   // How the direction of this message's own text is arrived at. Passed down
@@ -30,6 +35,12 @@ Rectangle {
   signal menuRequested(real sceneX, real sceneY)
 
   readonly property bool hot: mouse.containsMouse || hasCursor
+
+  // How many messages the conversation holds, for the badge — and zero for a
+  // row that draws none, which `Model.badgeCount` decides: a provider that does
+  // not group its listing, a conversation of one, a summary cached before rows
+  // carried a block at all.
+  readonly property int threadCount: Model.badgeCount(root.summary)
 
   // The subject is asked on its own account: a reply prefix is Latin whatever
   // the thread is written in, so `Re: مرحبا` reads left-to-right to anything
@@ -137,15 +148,42 @@ Rectangle {
       }
     }
 
-    Text {
+    Item {
       width: parent.width
-      textFormat: Text.PlainText
-      text: root.summary.from.display
-      color: root.dimColor
-      font.family: root.panelFontFamily
-      font.pixelSize: Style.font.bodySmall
-      elide: Text.ElideRight
-      horizontalAlignment: root.textAlignment
+      implicitHeight: sender.implicitHeight
+
+      Text {
+        id: sender
+        anchors.left: parent.left
+        anchors.right: count.visible ? count.left : parent.right
+        anchors.rightMargin: count.visible ? Style.space(4) : 0
+        textFormat: Text.PlainText
+        text: root.summary.from.display
+        color: root.dimColor
+        font.family: root.panelFontFamily
+        font.pixelSize: Style.font.bodySmall
+        elide: Text.ElideRight
+        horizontalAlignment: root.textAlignment
+      }
+
+      // How long the conversation is, beside who wrote it — where Gmail puts
+      // it, and the one place on the row that is about the thread rather than
+      // about the message the server returned for it.
+      //
+      // Drawn only where the model gave it a number: two or more, on a provider
+      // that groups its listing.
+      Text {
+        id: count
+        anchors.right: parent.right
+        anchors.baseline: sender.baseline
+        visible: root.conversations && root.threadCount > 0
+        textFormat: Text.PlainText
+        text: root.threadCount
+        color: root.dimColor
+        font.family: root.panelFontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: root.summary.unread
+      }
     }
 
     Text {

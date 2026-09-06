@@ -4,6 +4,7 @@
 .import "Outlook.js" as Outlook
 .import "Imap.js" as Imap
 .import "Hey.js" as Hey
+.import "Jmap.js" as Jmap
 
 // What kind of mail service an account is, and what the rest of the plugin may
 // therefore ask of it.
@@ -41,6 +42,13 @@ function capabilities(values) {
     move: raw.move === true,
     // A server-side conversation id.
     threads: raw.threads === true,
+    // A different question: whether the *listing* collapses to one row per
+    // conversation. Having thread ids does not settle it — Gmail has them and
+    // still lists messages, because collapsing its list would cost a
+    // `threads.get` per thread — while HEY's rows already are conversations
+    // with nothing here to do. Grouping is a rule above this seam, and this is
+    // what gates it.
+    conversations: raw.conversations === true,
     // "Archive" means something.
     archive: raw.archive === true,
     // A junk verb the server acts on.
@@ -116,17 +124,27 @@ function define(source) {
     webHomeUrl: typeof raw.webHomeUrl === "function" ? raw.webHomeUrl : function() { return "" },
     // Where the program a provider runs on lives, for the providers that run on
     // one. Only HEY does: the other three are spoken to directly.
-    clientUrl: String(raw.CLIENT_URL || "")
+    clientUrl: String(raw.CLIENT_URL || ""),
+    // One more line about a particular mailbox, for the row that lists them.
+    // Most providers have nothing to add — the address already says which
+    // service it is — so the default is silence, and a row draws this only
+    // when it is not.
+    detail: typeof raw.detail === "function" ? raw.detail : function() { return "" }
   }
 }
 
 // ---------------------------------------------------------------- registry
 
 // The order the provider chooser lists them in: the two hosted mailboxes with a
-// service of their own first, then the one that is every other mailbox. IMAP is
+// service of their own first, then the two that are every other mailbox. IMAP is
 // last because it is the answer for a server this list does not name, and a
 // chooser that opened with it would ask the question backwards.
-var ALL = [define(Gmail), define(Outlook), define(Hey), define(Imap)]
+//
+// JMAP goes in front of it for the same reason and one more: a server that
+// speaks both is better read over JMAP — threads, a junk verb, and one round
+// trip for a batch — so somebody who has one should meet it before they settle
+// for the catch-all.
+var ALL = [define(Gmail), define(Outlook), define(Hey), define(Jmap), define(Imap)]
 
 var DEFAULT_ID = "gmail"
 
@@ -164,14 +182,57 @@ function unavailableReason(id) {
   return String(get(id).unavailable || "")
 }
 
-function can(id, capability) {
-  return get(id).capabilities[String(capability)] === true
+// A provider's capability list is a *ceiling*: the most any account of that
+// kind may offer. One account can honestly do less than another of the same
+// kind — a JMAP server with no Archive mailbox, one whose Junk folder trains
+// nothing — so an account may *refuse* a ceiling capability. It may never add
+// one, which is why every answer below starts from the ceiling.
+//
+// A refusal is the client's own `refusals` object: capability name to the
+// reason a user is shown. An absent key means "as the ceiling says", so a
+// client that exposes none — Gmail, HEY and IMAP — is answered exactly as it
+// was before the argument existed.
+function refuses(refusals, capability) {
+  if (!refusals) return false
+  // Presence is the refusal; the value is only the sentence shown for it. Read
+  // rather than tested for with `hasOwnProperty`, because these objects cross
+  // the QML boundary and a plain read is the one thing that means the same on
+  // both sides of it.
+  var reason = refusals[String(capability)]
+  return reason !== undefined && reason !== null
+}
+
+function can(id, capability, refusals) {
+  if (get(id).capabilities[String(capability)] !== true) return false
+  return !refuses(refusals, capability)
+}
+
+// Why this account said no, for the note shown when a key reaches an action the
+// account cannot honour. "" when the account refused nothing — including when
+// the ceiling never offered the capability, since there is nothing there to
+// withdraw and the provider's own wording is the honest answer.
+function refusal(id, capability, refusals) {
+  if (get(id).capabilities[String(capability)] !== true) return ""
+  if (!refuses(refusals, capability)) return ""
+  return String(refusals[String(capability)])
 }
 
 // ---------------------------------------------------------------- queries
 
-function mailboxes(id) {
-  return get(id).mailboxes.slice()
+// `absent` is the rail keys this account has no mailbox for, which is a fact
+// about the account rather than about the provider: a JMAP server need not have
+// an Archive or a Junk folder. Their rows are dropped rather than drawn dead,
+// and because the number keys are positional the rows below move up.
+function mailboxes(id, absent) {
+  var list = get(id).mailboxes
+  var missing = Array.isArray(absent) ? absent : []
+  var drop = []
+  for (var i = 0; i < missing.length; i++) drop.push(String(missing[i]))
+  var out = []
+  for (var j = 0; j < list.length; j++) {
+    if (drop.indexOf(list[j].key) < 0) out.push(list[j])
+  }
+  return out
 }
 
 function mailboxIndex(id, key) {
@@ -251,6 +312,14 @@ function badge(id) {
 
 function summary(id) {
   return String(get(id).summary || "")
+}
+
+// What else there is to say about one mailbox of this kind, from its own
+// account entry. The settings row draws it under the address; "" is the answer
+// for every provider that has nothing to add, and the row then draws nothing
+// rather than an empty line.
+function detail(id, account) {
+  return String(get(id).detail(account) || "")
 }
 
 // The file in `assets/` that shows what this service is, or "" for one with no

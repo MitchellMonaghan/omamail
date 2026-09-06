@@ -635,6 +635,25 @@ for client in providers/GmailApiClient.qml providers/HeyClient.qml providers/Ima
   grep -q 'function getMessages(ids, full, callback, existingHandle, progress)' "$client" \
     || fail "$client must expose the shared progressive list interface"
 done
+# The conversation rail asks every client for the members of the open thread and
+# draws whatever comes back. A provider that does not collapse its listing has
+# nothing to say and answers with an empty list — but it has to answer, or the
+# reader would need to know which provider it is looking at.
+for client in providers/GmailApiClient.qml providers/HeyClient.qml \
+    providers/ImapClient.qml providers/JmapClient.qml; do
+  grep -q 'function getSummaries(ids, callback)' "$client" \
+    || fail "$client must expose the shared conversation-member interface"
+done
+# A member is a message and a stop must tell the truth about that message. A
+# thread block speaks for the whole conversation, so putting one on a member
+# would draw a stop bold because a different message in the thread is unread.
+awk '
+  /function getSummaries\(/ { in_members = 1 }
+  in_members && /withThreadBlock/ { exit 1 }
+  in_members && /^  function getMessages\(/ { exit 0 }
+  END { exit 0 }
+' providers/JmapClient.qml \
+  || fail "a conversation member must not be given the row's thread block"
 grep -q 'if (ids.length > 0) progress({' providers/ImapClient.qml \
   || fail "IMAP search windows must report ids before the final page"
 grep -q 'Imap\.uidCeilingCommand()' providers/ImapClient.qml \
@@ -683,7 +702,7 @@ grep -q 'var invalidatesPage = !survives || opaqueQuery' account/MailAccount.qml
   || fail "paging membership must not follow the reader's keep-open decision"
 grep -q 'if (!service.act(acted, action)) return false' App.qml \
   || fail "a refused action must not move the keyboard cursor"
-grep -q 'queueAction(messageId, action, cacheKey, quiet === true)' account/MailAccount.qml \
+grep -q 'queueAction(messageId, action, cacheKey, quiet === true, oneMessage)' account/MailAccount.qml \
   || fail "automatic mark-read must wait rather than disappear behind another action"
 # Clearing a mailbox means pressing the same key down a list faster than any
 # server answers. Refusing the second press dropped it: the message stayed, the
@@ -692,7 +711,7 @@ grep -q 'queueAction(messageId, action, cacheKey, quiet === true)' account/MailA
 awk '
   /function act\(/ { in_act = 1 }
   in_act && /if \(pendingAction !== ""\)/ { in_guard = 1 }
-  in_guard && /queueAction\(messageId, action, cacheKey, quiet === true\)/ { queues = 1 }
+  in_guard && /queueAction\(messageId, action, cacheKey, quiet === true, oneMessage\)/ { queues = 1 }
   in_guard && /return true/ { exit !queues }
   END { exit !queues }
 ' account/MailAccount.qml \
@@ -712,7 +731,7 @@ awk '
 # trashed message on screen under the reader that deleted it.
 awk '
   /function runQueuedAction\(\)/ { in_queued = 1 }
-  in_queued && /act\(request\.id, request\.action, request\.quiet\)/ { forwards = 1 }
+  in_queued && /act\(request\.id, request\.action, request\.quiet, request\.memberOnly\)/ { forwards = 1 }
   /function refuseUnavailableAction\(/ { exit !forwards }
   END { exit !forwards }
 ' account/MailAccount.qml \
@@ -1159,5 +1178,45 @@ if "FileDialog" in block or "execDetached" in block:
         "test_source.sh: Attach must not open an in-process dialog or a detached file manager"
     )
 PY
+
+# The JMAP transport script builds the credential itself: `user = "name:secret"`
+# for Basic and an Authorization header for Bearer, and it refuses any other
+# scheme before curl runs. QML assembling one would be a second place the rule
+# lived, and the one that could get it wrong without a shell test noticing —
+# the script's own tests assert the config bytes, and nothing asserts a header
+# QML wrote.
+python3 - <<'PY1'
+from pathlib import Path
+import re
+
+for name in ("providers/JmapClient.qml", "providers/JmapAuth.qml",
+             "components/JmapSetupPage.qml"):
+    # Comments say what the rule is; only code can break it.
+    code = re.sub(r"//[^\n]*", "", Path(name).read_text())
+    for literal in re.findall(r'"(?:[^"\\]|\\.)*"', code):
+        if re.search(r"Authorization|Basic |Bearer ", literal):
+            raise SystemExit(
+                "test_source.sh: the JMAP transport builds the credential; "
+                + name + " must never assemble an Authorization value: " + literal
+            )
+PY1
+
+# The secret is an app password or an API token and it lives in the keyring.
+# accounts.json is world-readable, so the settings a JMAP account keeps are the
+# four things sign-in learned and nothing that could authenticate with them.
+python3 - <<'PY2'
+from pathlib import Path
+import re
+
+source = Path("account/Accounts.js").read_text()
+start = source.index("function makeJmapSettings(raw)")
+end = source.index("\nfunction ", start + 1)
+block = source[start:end]
+for word in ("secret", "password", "token"):
+    if re.search(word, block, re.I):
+        raise SystemExit(
+            "test_source.sh: a JMAP account's settings must not carry a credential: " + word
+        )
+PY2
 
 printf 'test_source.sh ok\n'

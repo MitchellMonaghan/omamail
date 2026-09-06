@@ -395,6 +395,20 @@ Item {
     return handle
   }
 
+  // The counted members of a conversation, for the reader's conversation rail.
+  //
+  // Always empty, and IMAP is never asked: it declares neither `threads` nor
+  // `conversations`. A row is a message and stands for nothing else, so there
+  // are no members to read.
+  function getSummaries(ids, callback) {
+    var handle = newHandle()
+    Qt.callLater(function() {
+      if (!root || handle.aborted || typeof callback !== "function") return
+      callback([], "")
+    })
+    return handle
+  }
+
   // A whole page in one round trip. Gmail costs one request per message here;
   // IMAP fetches the lot with a single UID FETCH, which is the one place this
   // provider is comfortably faster than the other.
@@ -693,8 +707,13 @@ Item {
     return handle
   }
 
+  // One id or a list of them, the way every other verb here already takes one.
+  // A row that stands for a conversation is trashed as its members, and the
+  // list arrives here flat — `applyPlan` groups by folder either way, so a
+  // batch is the same walk the single message already took.
   function trashMessage(id, callback) {
     var handle = newHandle()
+    var ids = Array.isArray(id) ? id : [id]
     ensureFolders(function(folderError) {
       if (handle.aborted) return
       if (folderError) {
@@ -707,20 +726,21 @@ Item {
           callback(null, "This server has no Trash folder to move the message to")
         return
       }
-      root.applyPlan([id], { add: [], remove: [], move: trash }, callback, handle)
+      root.applyPlan(ids, { add: [], remove: [], move: trash }, callback, handle)
     })
     return handle
   }
 
   function untrashMessage(id, callback) {
     var handle = newHandle()
+    var ids = Array.isArray(id) ? id : [id]
     ensureFolders(function(folderError) {
       if (handle.aborted) return
       if (folderError) {
         if (typeof callback === "function") callback(null, folderError)
         return
       }
-      root.applyPlan([id], { add: [], remove: ["\\Deleted"], move: "INBOX" }, callback, handle)
+      root.applyPlan(ids, { add: [], remove: ["\\Deleted"], move: "INBOX" }, callback, handle)
     })
     return handle
   }
