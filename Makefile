@@ -1,6 +1,6 @@
 QMLLINT := /usr/lib/qt6/bin/qmllint
 QML_FILES := Service.qml BarWidget.qml App.qml \
-	account/MailAccount.qml \
+	account/MailAccount.qml account/NewMailNotification.qml \
 	cache/CacheStore.qml cache/BodyCache.qml \
 	providers/AuthManager.qml providers/GmailApiClient.qml \
 	providers/OutlookAuth.qml \
@@ -112,6 +112,7 @@ test-shell: test-shell-portable test-shell-libcurl
 # Everything here drives one of our own scripts against a fake server and
 # asserts what the script did with the answer, so any libcurl can run it.
 test-shell-portable:
+	python3 tests/test_notification.py
 	python3 tests/test_curl_config.py
 	python3 tests/test_public_http.py
 	python3 tests/test_contacts.py

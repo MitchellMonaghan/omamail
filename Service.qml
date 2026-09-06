@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons
 import "account"
 import "calendar"
 
@@ -235,6 +236,12 @@ Item {
     saveAccounts()
     refreshCurrent()
     return true
+  }
+
+  function openNotification(accountId, messageId) {
+    if (!Accounts.find(accountList, accountId) || !messageId) return
+    if (shell && typeof shell.summon === "function")
+      shell.summon("omamail", JSON.stringify({ accountId: accountId, messageId: messageId }))
   }
 
   // The switcher selects by position, because that is the only handle a mailbox
@@ -1097,6 +1104,9 @@ Item {
         return index < accounts.length ? accounts[index] : null
       }
 
+      notificationForeground: root.shell && root.shell.bar
+        ? root.shell.bar.barForeground : Color.foreground
+      notificationAccent: Color.accent
       pluginDir: root.pluginDir
       accountId: entry ? entry.id : ""
       configuredEmail: entry ? entry.email : ""
@@ -1116,6 +1126,9 @@ Item {
       // willing to tell a sender, not about which account the mail came to.
       alwaysShowImages: root.alwaysShowImages
 
+      onNotificationActivated: function(accountId, messageId) {
+        root.openNotification(accountId, messageId)
+      }
       onAccountIdentified: function(email) { root.nameAccount(index, email) }
       // What a JMAP sign-in learned about its server, written onto the entry
       // the same way the setup form's own save is: the row keeps everything

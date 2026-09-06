@@ -786,7 +786,7 @@ grep -q 'MAX_SUMMARIES_PER_QUERY' cache/Cache.js \
 
 # New-mail notifications use the application's own mark, not the desktop's
 # generic unread-mail glyph.
-grep -q 'root\.pluginDir + "/assets/omamail\.svg"' account/MailAccount.qml \
+grep -q 'assets/omamail.svg' scripts/notify-mail.py \
   || fail "new-mail notifications need the Omamail app icon"
 [ -f assets/omamail.svg ] || fail "the notification app icon is missing"
 
