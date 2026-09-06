@@ -52,16 +52,18 @@ function setupHeadline(state, provider, authKind) {
   // plugin never named.
   if (state === "tools_missing")
     return authKind === "cli" ? "Install the HEY CLI" : "Missing system tools"
-  // Three sign-ins, three first steps: a Cloud console, a server and a
-  // password, or nothing at all because the provider's own program holds it.
+  // Four sign-ins, four first steps: a Cloud console, a Microsoft public
+  // client, a server and password, or the provider's own program.
   if (state === "no_credentials") {
     if (authKind === "password") return "Add this mailbox"
     if (authKind === "cli") return "Sign in to " + name
+    if (name === "Outlook") return "Add this Outlook mailbox"
     return "Connect a Google Cloud project"
   }
   if (state === "signing_in") {
     if (authKind === "password") return "Checking the mailbox…"
     if (authKind === "cli") return "Waiting for " + name + "…"
+    if (name === "Outlook") return "Waiting for Microsoft…"
     return "Waiting for Google…"
   }
   if (state === "reconnecting") return "Reconnecting to " + name + "…"
@@ -89,6 +91,8 @@ function setupDetail(state, missingTools, reason, provider, authKind) {
       return "Enter the server and the password for this mailbox. Most providers want an app password rather than the one you sign in to the website with."
     if (authKind === "cli")
       return "The HEY CLI is installed. Signing in opens HEY in your browser; the token it comes back with is the CLI's own, and Omamail never sees it."
+    if (name === "Outlook")
+      return "Add the mailbox and a Microsoft public-client ID. Sign-in happens on Microsoft's page; Omamail never sees the account password."
     return "Gmail has no shared app to sign in through, so this plugin uses an OAuth client you own. It takes about two minutes to create."
   }
   if (state === "signing_in") {

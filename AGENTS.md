@@ -49,7 +49,7 @@ three directories away from the client that calls it.
   tests can reach it without a compositor. QML holds no logic worth testing.
 - One JS resource may build on others with QML's `.import "Other.js" as Other`,
   which is how `providers/Registry.js` is assembled out of `Gmail.js`,
-  `Hey.js` and `Imap.js` — and those out of `GmailApi.js` and `HeyCli.js` in
+  `Outlook.js`, `Hey.js` and `Imap.js` — and those out of `GmailApi.js` and `HeyCli.js` in
   turn, because where a message lives on the web is a fact about the service
   rather than about the registry. `tests/load.js` resolves the chain the same
   way the engine does, so the tests exercise the real files.
@@ -222,14 +222,14 @@ key. What matters while working:
 
 ## Providers
 
-- A mailbox is a **provider**: `gmail`, `hey`, or `imap`, listed in that order
-  because IMAP is the answer for a server the other two do not name and a
+- A mailbox is a **provider**: `gmail`, `outlook`, `hey`, or `imap`, listed in that order
+  because IMAP is the answer for a server the other three do not name and a
   chooser that opened with it would ask the question backwards. `Provider.js` is
   the only place that knows the differences — which mailboxes exist, what a query
   string means, what the service can be asked to do, and how it signs in.
   Nothing above it branches on a provider id.
 - Two objects make a provider work: something that signs in (`AuthManager`,
-  `HeyAuth`, `ImapAuth`) and something that fetches (`GmailApiClient`,
+  `OutlookAuth`, `HeyAuth`, `ImapAuth`) and something that fetches (`GmailApiClient`,
   `HeyClient`, `ImapClient`).
   `MailAccount` builds one pair through a `Loader` and drives them through an
   identical interface — same method names, same arguments, same callback shape.
@@ -364,6 +364,7 @@ key. What matters while working:
 ## Secrets
 
 - Refresh tokens go to GNOME Keyring over stdin, never through a command line.
+- Outlook access tokens reach curl over stdin and its `oauth2-bearer` config option; the account password never enters Omamail.
 - The OAuth client goes to a 0600 file, never to plugin settings: `shell.json`
   is world-readable.
 - Anything that could carry a credential passes through `OAuth.redact` before

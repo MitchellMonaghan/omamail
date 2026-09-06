@@ -3,9 +3,11 @@ QML_FILES := Service.qml BarWidget.qml App.qml \
 	account/MailAccount.qml \
 	cache/CacheStore.qml cache/BodyCache.qml \
 	providers/AuthManager.qml providers/GmailApiClient.qml \
+	providers/OutlookAuth.qml \
 	providers/ImapAuth.qml providers/ImapClient.qml \
 	providers/HeyAuth.qml providers/HeyClient.qml \
 	components/ImapSetupPage.qml \
+	components/OutlookSetupPage.qml \
 	components/HeySetupPage.qml \
 	components/ProviderPicker.qml \
 	components/GmailIcon.qml \
@@ -70,6 +72,7 @@ test-js:
 	node tests/test_recipients.js
 	node tests/test_senders.js
 	node tests/test_oauth.js
+	node tests/test_microsoft_oauth.js
 	node tests/test_credentials.js
 	node tests/test_secrets.js
 	node tests/test_gmail_api.js

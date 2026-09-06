@@ -368,10 +368,8 @@ Item {
     return next
   }
 
-  // What the IMAP setup form saves: the address, the servers, and which
-  // provider this row is. Written before the password is tried, so a mailbox
-  // that fails to sign in still has its settings to correct rather than an
-  // empty form to fill in again.
+  // What a provider setup form saves: the address, non-secret client or server
+  // configuration, and which provider this row is.
   function configureAccount(index, values) {
     var accounts = accountList.accounts
     if (index < 0 || index >= accounts.length) return
@@ -381,6 +379,8 @@ Item {
     for (var key in accounts[index]) entry[key] = accounts[index][key]
     if (raw.provider !== undefined) entry.provider = raw.provider
     if (raw.email !== undefined) entry.email = raw.email
+    if (raw.clientId !== undefined) entry.clientId = raw.clientId
+    if (raw.clientSecret !== undefined) entry.clientSecret = raw.clientSecret
     if (raw.imap !== undefined) entry.imap = raw.imap
     if (raw.label !== undefined) entry.label = raw.label
 
@@ -946,6 +946,13 @@ Item {
     Qt.callLater(function() { root.signInWithPassword(secret) })
   }
 
+  // OAuth providers save their non-secret client configuration before the
+  // account host that owns the browser flow is built.
+  function configureCurrentAccountAndSignInOAuth(values) {
+    configureCurrentAccount(values)
+    Qt.callLater(function() { root.signIn() })
+  }
+
   function indexOfActiveAccount() {
     var accounts = accountList ? accountList.accounts : []
     for (var i = 0; i < accounts.length; i++) {
@@ -1078,6 +1085,7 @@ Item {
       pluginDir: root.pluginDir
       accountId: entry ? entry.id : ""
       configuredEmail: entry ? entry.email : ""
+      oauthClientId: entry ? entry.clientId : ""
       // Which service this mailbox is, and — for the one that needs them — the
       // servers it talks to. Both come off the account entry, so changing an
       // account's provider in the file rebuilds it as that provider.

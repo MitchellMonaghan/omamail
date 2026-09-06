@@ -37,6 +37,7 @@ Item {
 
   required property string pluginDir
   property string configuredEmail: ""
+  property string oauthClientId: ""
 
   // Which mailbox this is, and whether it is the one on screen. An inactive
   // account still counts its unread mail; it just does not fetch lists or
@@ -2365,7 +2366,7 @@ Item {
       "https://console.cloud.google.com/apis/library/gmail.googleapis.com"])
   }
 
-  // What both providers do once they are signed in. Named rather than repeated
+  // What every provider does once it is signed in. Named rather than repeated
   // in each component, because the two sign-ins differ in everything except
   // what has to happen afterwards.
   function afterSignIn() {
@@ -2471,7 +2472,8 @@ Item {
   Loader {
     id: authLoader
     sourceComponent: root.providerId === "imap" ? imapAuthComponent
-      : (root.providerId === "hey" ? heyAuthComponent : gmailAuthComponent)
+      : (root.providerId === "outlook" ? outlookAuthComponent
+        : (root.providerId === "hey" ? heyAuthComponent : gmailAuthComponent))
   }
 
   // The client takes the manager as a required property, so it cannot be built
@@ -2479,7 +2481,8 @@ Item {
   Loader {
     id: apiLoader
     active: !!authLoader.item
-    sourceComponent: root.providerId === "imap" ? imapClientComponent
+    sourceComponent: root.providerId === "imap" || root.providerId === "outlook"
+      ? imapClientComponent
       : (root.providerId === "hey" ? heyClientComponent : gmailClientComponent)
   }
 
@@ -2537,6 +2540,24 @@ Item {
       }
       onLoggedOut: root.clearNotice()
       onCredentialsSaved: root.note("Mailbox saved")
+      onSessionUnavailable: function(reason) { root.fail(reason) }
+    }
+  }
+
+  Component {
+    id: outlookAuthComponent
+
+    OutlookAuth {
+      pluginDir: root.pluginDir
+      accountId: root.accountId
+      configuredClientId: root.oauthClientId
+      configuredEmail: root.configuredEmail
+
+      onLoginSucceeded: {
+        root.lastError = lastError
+        root.afterSignIn()
+      }
+      onLoggedOut: root.clearNotice()
       onSessionUnavailable: function(reason) { root.fail(reason) }
     }
   }

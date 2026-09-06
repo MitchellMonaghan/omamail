@@ -2,11 +2,7 @@
 
 **Your mail as a native Omarchy window — not a browser tab.**
 
-Omamail is an Omarchy desktop email client: a Quickshell plugin that reads,
-triages, and answers your mail over the official Gmail API, over the HEY CLI
-client 37signals publish, or over IMAP and SMTP for every other mailbox. It
-runs inside the `omarchy-shell` process you already have, follows your active
-theme, and puts an unread count in the bar.
+Omamail is an Omarchy desktop email client: a Quickshell plugin that reads, triages, and answers your mail over the official Gmail API, through Microsoft OAuth for Outlook, over the HEY CLI client 37signals publish, or over IMAP and SMTP for every other mailbox. It runs inside the `omarchy-shell` process you already have, follows your active theme, and puts an unread count in the bar.
 
 
 <img width="800" alt="Omamail - Reading a message in the three-column window" src="docs/images/full-mail.webp" />
@@ -29,10 +25,7 @@ other IMAP server — including one you run yourself.
   inside Omarchy rather than to look like a web app in a window. Three columns
   when there is room, one when there is not, and nothing on screen that is not
   your mail.
-- **Gmail, HEY and IMAP.** Sign in to Gmail with Google directly, to HEY
-  through the HEY CLI that 37signals publish, or add any IMAP mailbox with an
-  address and an app password. Several accounts at once, each with its own
-  inbox, cache and unread count.
+- **Gmail, Outlook, HEY and IMAP.** Sign in to Gmail with Google, to Outlook with Microsoft, to HEY through the HEY CLI that 37signals publish, or add any other IMAP mailbox with an address and an app password. Several accounts at once, each with its own inbox, cache and unread count.
 - **Keyboard-first.** `j`/`k` to move, `e` to archive, `v` to file, `s` to star, `r` to
   reply, `c` to compose, `Alt+1`…`0` for the mailboxes — hold Alt and the rail says
   which is which — `Alt+A` to switch account, `/` to search, `?` for the rest.
@@ -73,10 +66,7 @@ other IMAP server — including one you run yourself.
   every message read that way instead. The interface itself is unaffected.
 - **Your theme.** Every colour comes from the active Omarchy theme, so the
   mailbox changes the moment the desktop does.
-- **Keyring-backed.** The Gmail refresh token and every IMAP password live in
-  GNOME Keyring — never in a config file, never on a command line. A HEY
-  mailbox has no credential here at all: the HEY CLI holds its own token, and
-  Omamail only ever asks it whether it is signed in.
+- **Keyring-backed.** Gmail and Outlook refresh tokens and every IMAP password live in GNOME Keyring — never in a config file, never on a command line. A HEY mailbox has no credential here at all: the HEY CLI holds its own token, and Omamail only ever asks it whether it is signed in.
 
 ## What it is
 
@@ -117,13 +107,14 @@ Requires Omarchy 4, plus `socat`, `secret-tool`, `openssl`, `xdg-open`, `python3
 
 ## Mailboxes it can open
 
-Adding a mailbox asks which kind first, because the three setups have nothing in
-common.
+Adding a mailbox asks which kind first, because the four setups have nothing in common.
 
 **Gmail** signs in with Google directly. Google issues Gmail API access per
 project, so this route needs an OAuth client you create once — the setup page
 walks through it. In exchange it gets labels, conversations, Gmail's own search
 syntax, and a "report spam" that Google actually learns from.
+
+**Outlook** signs in on Microsoft's own page and uses [Microsoft's supported OAuth route for IMAP and SMTP][microsoft-mail-oauth]. It works with Outlook.com, Hotmail, Live and MSN accounts; Omamail never asks for the Microsoft account password. Until Omamail ships a maintainer-owned public client, the setup page asks for an Application (client) ID from a one-time Microsoft Entra app registration. Make it a public client for personal Microsoft accounts; the sign-in asks for `IMAP.AccessAsUser.All`, `SMTP.Send` and `offline_access` and shows the device code to enter in the Microsoft page it opens.
 
 **HEY** needs no address and no password. HEY publishes no IMAP, no POP and no
 public API, so Omamail reads it through the [HEY CLI][hey-cli] client 37signals
@@ -165,12 +156,7 @@ parts of a message that `hey` does not serve, or out of an endpoint it does not
 expose — so they stay in HEY's own app, which the setup page links to.
 
 
-**IMAP** is an address and a password. Fastmail, iCloud, Zoho, Outlook, GMX,
-Proton via its Bridge, or a server of your own: the servers are filled in from
-the address for the ones this knows, and shown behind a disclosure so they can
-be corrected for the ones it does not. Most providers want an *app password*
-rather than the one you sign in to their website with, and the form says so
-before you find out the hard way.
+**IMAP** is an address and a password. Fastmail, iCloud, Zoho, GMX, Proton via its Bridge, or a server of your own: the servers are filled in from the address for the ones this knows, and shown behind a disclosure so they can be corrected for the ones it does not. Most providers want an *app password* rather than the one you sign in to their website with, and the form says so before you find out the hard way.
 
 What IMAP does not have, the panel does not offer: no labels, no server-side
 conversations, no "report spam" — moving a message to a Junk folder teaches a
@@ -191,7 +177,7 @@ That takes the plugin itself. Nothing it wrote lives inside your Omarchy
 config, so removing those is separate and entirely up to you:
 
 ```bash
-secret-tool clear service omamail    # the refresh token and IMAP passwords
+secret-tool clear service omamail    # refresh tokens and IMAP passwords
 hey auth logout                      # the HEY session, if you added one
 rm -rf ~/.config/omamail             # the OAuth client and account list
 rm -rf ~/.cache/omamail              # cached mail
@@ -297,6 +283,7 @@ thousand of them, evicted least-recently-used.
   written over stdin so it never appears in the process table. Two mailboxes
   share one client, so keying by client alone would have let the second sign-in
   overwrite the first.
+- The Outlook refresh token goes to **GNOME Keyring** under its own provider, client and account keys. The Microsoft Application (client) ID is public configuration and stays with the account entry.
 - The OAuth client goes to `~/.config/omamail/credentials.json`, mode
   `0600`. Not to plugin settings — `shell.json` is world-readable.
 - The access token exists only in memory.
@@ -318,10 +305,9 @@ How to send a change — there is no issue tracker — is in
 [CONTRIBUTING.md](CONTRIBUTING.md). Working agreements are in
 [AGENTS.md](AGENTS.md) and the specification is in [docs/SPEC.md](docs/SPEC.md).
 
-Omamail is an independent project and is not affiliated with Google or
-37signals. Gmail is a trademark of Google LLC; HEY is a trademark of 37signals,
-LLC.
+Omamail is an independent project and is not affiliated with Google, Microsoft or 37signals. Gmail is a trademark of Google LLC; Outlook is a trademark of Microsoft Corporation; HEY is a trademark of 37signals, LLC.
 
 Licensed under the [MIT License](LICENSE).
 
 [hey-cli]: https://github.com/basecamp/hey-cli
+[microsoft-mail-oauth]: https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth

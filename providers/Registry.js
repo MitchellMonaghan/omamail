@@ -1,6 +1,7 @@
 .pragma library
 
 .import "Gmail.js" as Gmail
+.import "Outlook.js" as Outlook
 .import "Imap.js" as Imap
 .import "Hey.js" as Hey
 
@@ -8,7 +9,7 @@
 // therefore ask of it.
 //
 // Each provider describes itself in a file of its own next door; this one is
-// the abstraction over the three. Everything above it asks questions here and
+// the abstraction over the four. Everything above it asks questions here and
 // never branches on a provider id — that is the whole point of the seam.
 //
 // A provider answers four questions:
@@ -81,7 +82,7 @@ function mailbox(raw) {
 
 // One provider, normalised. A definition file states only what is true of it;
 // the defaults, and the rule that an undeclared capability is a "no", live here
-// so they cannot drift between three files.
+// so they cannot drift between four files.
 function define(source) {
   var raw = source || {}
   var boxes = []
@@ -114,7 +115,7 @@ function define(source) {
     // that empty string is what removes the link from a mailbox's settings row.
     webHomeUrl: typeof raw.webHomeUrl === "function" ? raw.webHomeUrl : function() { return "" },
     // Where the program a provider runs on lives, for the providers that run on
-    // one. Only HEY does: the other two are spoken to directly.
+    // one. Only HEY does: the other three are spoken to directly.
     clientUrl: String(raw.CLIENT_URL || "")
   }
 }
@@ -125,7 +126,7 @@ function define(source) {
 // service of their own first, then the one that is every other mailbox. IMAP is
 // last because it is the answer for a server this list does not name, and a
 // chooser that opened with it would ask the question backwards.
-var ALL = [define(Gmail), define(Hey), define(Imap)]
+var ALL = [define(Gmail), define(Outlook), define(Hey), define(Imap)]
 
 var DEFAULT_ID = "gmail"
 
