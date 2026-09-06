@@ -116,6 +116,8 @@ syntax, and a "report spam" that Google actually learns from.
 
 **Outlook** signs in on Microsoft's own page and uses [Microsoft's supported OAuth route for IMAP and SMTP][microsoft-mail-oauth]. It works with Outlook.com, Hotmail, Live and MSN accounts; Omamail never asks for the Microsoft account password. Until Omamail ships a maintainer-owned public client, the setup page asks for an Application (client) ID from a one-time Microsoft Entra app registration. Make it a public client for personal Microsoft accounts; the sign-in asks for `IMAP.AccessAsUser.All`, `SMTP.Send` and `offline_access` and shows the device code to enter in the Microsoft page it opens.
 
+Before signing in, enable IMAP in Outlook.com: **Settings > Mail > Forwarding and IMAP > Let devices and apps use IMAP**, then save. Microsoft disables IMAP by default; OAuth consent alone does not enable mailbox access. See [Microsoft's IMAP setup instructions](https://support.microsoft.com/en-us/outlook/pop-imap-and-smtp-settings-for-outlook-com).
+
 **HEY** needs no address and no password. HEY publishes no IMAP, no POP and no
 public API, so Omamail reads it through the [HEY CLI][hey-cli] client 37signals
 ship for exactly this — which means the sign-in, the token and the keyring entry

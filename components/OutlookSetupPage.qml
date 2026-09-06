@@ -172,6 +172,30 @@ Column {
 
   Column {
     width: parent.width
+    visible: !root.signedIn
+    spacing: Style.space(6)
+
+    Text {
+      width: parent.width
+      text: "Enable IMAP in Outlook.com before signing in. Under Settings > Mail > Forwarding and IMAP, turn on Let devices and apps use IMAP, then save."
+      color: root.dimColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+
+    LinkLabel {
+      text: "Open Outlook IMAP help..."
+      color: root.textColor
+      font.family: root.panelFontFamily
+      font.pixelSize: Style.font.caption
+      tooltipText: "https://support.microsoft.com/en-us/outlook/pop-imap-and-smtp-settings-for-outlook-com"
+      onActivated: Qt.openUrlExternally(tooltipText)
+    }
+  }
+
+  Column {
+    width: parent.width
     visible: !root.usingBuiltinClient && !root.signedIn
     spacing: Style.space(6)
 
