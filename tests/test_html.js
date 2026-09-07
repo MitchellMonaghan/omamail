@@ -945,7 +945,7 @@ function reading(source, options) {
     assert.ok(pair === "a/href" || pair === "img/src"
       || pair === "img/width" || pair === "img/height"
       || pair === "table/cellspacing" || pair === "table/cellpadding"
-      || pair === "td/valign" || pair === "td/style",
+      || pair === "td/valign" || pair === "td/style" || pair === "td/align",
       "reading mode emitted " + pair + ", which is a sender attribute it cannot have")
   }
   // The attribute list is only half of it. An element the reader never built
@@ -1484,6 +1484,38 @@ function activityMail() {
       + "<img src=\"https://cdn.example.com/alice.png\" width=\"20\" height=\"20\"></a></td>"
       + "<td valign=\"middle\" style=\"padding:0px\"><strong>Alice</strong> left a comment</td>"
       + "</tr></table>")
+
+  // A compact status strip is one row even though each label sits above its
+  // icon. This is the shape of a seven-day streak, without personal mail data.
+  const statusCell = (label, width = 28) => '<td><div>' + label + '</div>'
+    + '<img src="https://cdn.example.com/status.png" width="' + width
+    + '" height="28" alt=""></td>'
+  const statusStrip = '<table><tr>'
+    + Array.from({ length: 7 }, (_, i) => statusCell(i === 6 ? '22' : '✔')).join('')
+    + '</tr></table>'
+  const strip = reading(statusStrip, { allowRemoteImages: true }).html
+  assert.strictEqual((strip.match(/<tr>/g) || []).length, 1)
+  assert.strictEqual((strip.match(/<td\b/g) || []).length, 7)
+  assert.strictEqual((strip.match(/<br>/g) || []).length, 7)
+  assert.strictEqual((strip.match(/<img\b/g) || []).length, 7)
+  const hostileStrip = statusStrip.replace(/<td>/g,
+    '<td align="right" background="https://private.example/b.gif" '
+    + 'style="padding:999px;background-image:url(https://private.example/b.gif)">')
+  assert.strictEqual(reading(hostileStrip, { allowRemoteImages: true }).html, strip,
+    'The generated layout must not copy sender attributes')
+  assert.ok(!reading(statusStrip.replace(/https:\/\/cdn.example.com\/status.png/g,
+    'http://127.0.0.1/private.png'), { allowRemoteImages: true }).html.includes('<img'))
+  // Blocked pictures do not gain a new path out through a generated table.
+  const blockedStrip = reading(statusStrip).html
+  assert.ok(!blockedStrip.includes('<img'))
+  assert.ok(!blockedStrip.includes('<table'))
+  // Long copy, large artwork and wide strips remain ordinary flowing blocks.
+  for (const cells of [statusCell('Long description').repeat(2),
+    statusCell('1', 200).repeat(2), statusCell('1', 80).repeat(7),
+    statusCell('1').repeat(9)]) {
+    assert.ok(!reading('<table><tr>' + cells + '</tr></table>',
+      { allowRemoteImages: true }).html.includes('<table'))
+  }
 
   // One parse answers for all three readings, which is what makes changing mode
   // free: the reader is built from the tree the sanitiser is about to clean,

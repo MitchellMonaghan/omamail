@@ -1,0 +1,62 @@
+import QtQuick
+import QtTest
+import "../../message/Html.js" as Html
+
+Item {
+  width: 800
+  height: 400
+
+  TextEdit {
+    id: document
+    textFormat: TextEdit.RichText
+    readOnly: true
+    wrapMode: TextEdit.Wrap
+    font.family: "monospace"
+    width: 280
+    height: contentHeight
+  }
+
+  TestCase {
+    name: "ReaderStatusRow"
+    when: windowShown
+
+    function test_labels_stay_side_by_side_data() {
+      return [
+        { tag: "narrow", width: 280, size: 13 },
+        { tag: "wide", width: 700, size: 13 },
+        { tag: "narrow-zoom", width: 280, size: 20 },
+        { tag: "wide-labels", width: 280, size: 20, suffix: "WWW" }
+      ]
+    }
+
+    function test_labels_stay_side_by_side(data) {
+      // A self-contained image prevents network traffic in the real Qt renderer.
+      var image = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+      var source = "<table><tr>"
+      for (var i = 0; i < 7; i++) {
+        source += "<td><div>" + String.fromCharCode(65 + i) + (data.suffix || "") + "</div><img src=\""
+          + image + "\" width=\"28\" height=\"28\"></td>"
+      }
+      source += "</tr></table>"
+      var ready = Html.sanitize(source, { withReader: true })
+      document.width = data.width
+      document.font.pixelSize = data.size
+      document.text = Html.readerDocumentFor(ready.reader.document, { fontSize: data.size })
+      wait(1)
+      var plain = document.getText(0, document.length)
+      var first = document.positionToRectangle(plain.indexOf("A"))
+      var previous = first
+      for (var j = 1; j < 7; j++) {
+        var position = plain.indexOf(String.fromCharCode(65 + j))
+        verify(position >= 0)
+        var rect = document.positionToRectangle(position)
+        compare(rect.y, first.y, "Status labels must share one horizontal row")
+        verify(rect.x > previous.x, "Each icon keeps its own column")
+        verify(rect.x + rect.width <= document.width, "The row fits the narrow reader")
+        previous = rect
+      }
+      verify(document.contentHeight < 120, "Seven statuses must not become fourteen paragraphs")
+      verify(document.contentWidth <= document.width, "The whole row must fit, including its last label")
+    }
+  }
+}

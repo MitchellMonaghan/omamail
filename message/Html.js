@@ -1725,7 +1725,7 @@ function documentFor(bodyHtml, colors) {
 //
 // Every element the reader emits is constructed here with an empty attribute
 // list and only these checked values are added. The reader may also add fixed
-// layout attributes of its own to a compact avatar row; none is copied from
+// layout attributes of its own to compact avatar and status rows; none is copied from
 // the sender. A class, an id, a bgcolor, an align, a style, a background or a
 // url() therefore cannot survive this pass by being missed. That is the whole
 // security argument for reading mode: structural, with a narrow numeric
@@ -2308,6 +2308,13 @@ function readerRow(node, state, ctx) {
   var built = []
   for (var j = 0; j < cells.length; j++) built.push(readerBuild(cells[j], ctx))
 
+  var statusRow = ctx.tables ? readerStatusRow(built) : null
+  if (statusRow !== null) {
+    readerFlush(state, "p")
+    state.blocks.push(statusRow)
+    return true
+  }
+
   var line = []
   for (var k = 0; k < built.length && line !== null; k++) {
     var blocks = built[k]
@@ -2333,6 +2340,53 @@ function readerRow(node, state, ctx) {
     for (var b = 0; b < built[n].length; b++) state.blocks.push(built[n][b])
   }
   return true
+}
+
+// A short label above one small icon is still a cell in a status strip, not
+// two unrelated paragraphs. Judge only rebuilt content, then make a bounded
+// table with our own spacing. Sender layout attributes never enter the result.
+function readerStatusRow(cells) {
+  if (cells.length < 2 || cells.length > MAX_READER_TABLE_COLUMNS) return null
+  var width = 0
+  for (var i = 0; i < cells.length; i++) {
+    var blocks = cells[i]
+    if (blocks.length !== 2 || blocks[0].name !== "p" || blocks[1].name !== "p") return null
+    var label = blocks[0].children
+    if (readerContainsImage(label) || readerBroken(label)
+      || readerLength(label) < 1 || readerLength(label) > 4
+      || readerSmallImageCount(blocks[1].children) !== 1) return null
+    var iconWidth = readerStatusIconWidth(blocks[1])
+    if (iconWidth === 0) return null
+    width += iconWidth + 4
+  }
+  // Fit compact mail panes without preserving arbitrary newsletter columns.
+  if (width > 256) return null
+  var table = readerElement("table")
+  table.attrs = [{ name: "cellspacing", value: "0" }, { name: "cellpadding", value: "0" }]
+  var row = readerElement("tr")
+  for (var c = 0; c < cells.length; c++) {
+    var cell = readerElement("td")
+    cell.attrs = [{ name: "align", value: "center" }, { name: "valign", value: "top" },
+      { name: "style", value: "padding:0px 2px" }]
+    cell.children = cells[c][0].children.concat([readerElement("br")], cells[c][1].children)
+    row.children.push(cell)
+  }
+  table.children.push(row)
+  return table
+}
+
+function readerStatusIconWidth(node) {
+  if (node.name === "img") {
+    var width = Number(attributeValue(node, "width"))
+    var height = Number(attributeValue(node, "height"))
+    return width > 2 && width <= MAX_READER_INLINE_IMAGE
+      && height > 2 && height <= MAX_READER_INLINE_IMAGE ? width : 0
+  }
+  for (var i = 0; i < (node.children || []).length; i++) {
+    var found = readerStatusIconWidth(node.children[i])
+    if (found > 0) return found
+  }
+  return 0
 }
 
 // A cell or a list item holding one paragraph holds inline content, not a
