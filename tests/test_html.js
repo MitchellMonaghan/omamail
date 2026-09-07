@@ -3,6 +3,31 @@ const { load, deepEqual } = require("./load")
 
 const html = load("message/Html.js")
 
+{
+  const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+  const source = '<table><tr><td style="text-align:center;background-color:#ffffff">'
+    + '<div>A</div> <img src="' + image + '" width="28" height="28">'
+    + '</td></tr></table>'
+  const before = html.sanitize(source, { withReader: true })
+  const after = html.sanitize(source, { preserveFormatting: true, withReader: true })
+  assert(after.html.includes('<div align="center"> <img'))
+  assert(after.html.includes('background-color:#ffffff'))
+  deepEqual(before.reader, after.reader)
+  for (const align of ['left', 'right', 'justify']) {
+    assert(html.sanitize(source.replace('text-align:center', 'text-align:' + align),
+      { preserveFormatting: true }).html.includes('<div align="' + align + '">'))
+  }
+  const blocked = html.sanitize(source.replace(image, 'https://example.com/picture'),
+    { preserveFormatting: true })
+  assert(!blocked.html.includes('<img'))
+  assert(!blocked.html.includes('<div align='))
+  for (const tag of ['u', 's', 'sub', 'sup', 'code', 'tt', 'strike']) {
+    const inline = source.replace('<div>A</div>', '<' + tag + '>A</' + tag + '>')
+    const result = html.sanitize(inline, { preserveFormatting: true }).html
+    assert(result.includes('<div align="center"><' + tag + '>A</' + tag + '> <img'))
+  }
+}
+
 // Original keeps supported sender presentation; Reader remains a rebuild.
 {
   const source = '<center><table bgcolor="#234567" cellpadding="12"><tr><td>'

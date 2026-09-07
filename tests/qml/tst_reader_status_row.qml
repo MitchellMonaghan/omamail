@@ -20,6 +20,38 @@ Item {
     name: "ReaderStatusRow"
     when: windowShown
 
+    function test_original_css_image_centering() {
+      // A 640x320 canvas displayed at 40px high, like a height-only hero image.
+      var image = 'data:image/gif;base64,R0lGODlhgAJAAYAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+      var source = '<table width="260"><tr><td><table width="100%"><tr><td><div>'
+        + '<table width="100%" cellspacing="0" cellpadding="0"><tbody><tr>'
+        + '<td style="padding:0 24px;text-align:center"> <img style="display:inline-block" height="40" src="' + image + '"> </td>'
+        + '</tr></tbody></table></div></td></tr></table></td></tr></table>'
+      var ready = Html.sanitize(source, { preserveFormatting: true })
+      document.width = 280
+      document.text = Html.documentFor(ready.document, { preserveFormatting: true, maxImageWidth: 280 })
+      wait(0)
+      var plain = document.getText(0, document.length)
+      var position = plain.indexOf('\ufffc')
+      verify(position >= 0)
+      var box = document.positionToRectangle(position)
+      verify(box.x > 80 && box.x < 110, "Image should be centered in its cell, x=" + box.x)
+    }
+
+    function test_original_label_above_icon() {
+      var image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+      var source = '<table><tr><td style="text-align:center"> <div style="font-size:11px"> A </div> '
+        + '<img width="28" height="28" src="' + image + '"> </td></tr></table>'
+      var ready = Html.sanitize(source, { preserveFormatting: true })
+      document.width = 280
+      document.text = Html.documentFor(ready.document, { preserveFormatting: true, maxImageWidth: 280 })
+      wait(0)
+      var plain = document.getText(0, document.length)
+      var label = document.positionToRectangle(plain.indexOf('A'))
+      var icon = document.positionToRectangle(plain.indexOf('\ufffc'))
+      verify(icon.y > label.y, "Icon should follow the label on its own line")
+    }
+
     function test_original_keeps_layout_alignment() {
       var source = '<table width="260" cellpadding="10" bgcolor="#234567"><tr>'
         + '<td><p align="center">Centered</p></td></tr><tr><td>'

@@ -1145,6 +1145,46 @@ function hasDirectImage(node) {
   return false
 }
 
+// Qt can merge an image following </div> into that div's last paragraph.
+// Give inline runs in aligned image cells their own explicit block: this also
+// carries the cell alignment to the image paragraph, rather than relying on
+// Qt's implicit first paragraph inheriting it. Only sanitized nodes move here.
+function alignImageCell(node) {
+  if (node.name !== "td" && node.name !== "th") return
+  if (!hasDirectImage(node)) return
+  var alignment = String(attributeValue(node, "align")).toLowerCase()
+  var declarations = sourceDeclarations(node) || []
+  for (var i = 0; i < declarations.length; i++) {
+    if (declarations[i].name === "text-align") alignment = declarations[i].value.toLowerCase()
+  }
+  if (!/^(left|center|right|justify)$/.test(alignment)) return
+  var result = []
+  var run = []
+  var image = false
+  function flush() {
+    if (image) result.push({ type: "element", name: "div", attrs: [
+      { name: "align", value: alignment }
+    ], children: run })
+    else for (var j = 0; j < run.length; j++) result.push(run[j])
+    run = []
+    image = false
+  }
+  for (var k = 0; k < node.children.length; k++) {
+    var child = node.children[k]
+    if (child.type === "text" || (BLOCK_ELEMENTS[child.name] !== true
+      && READER_BLOCK[child.name] !== true && TABLE_PARTS[child.name] !== true
+      && child.name !== "pre" && child.name !== "hr")) {
+      run.push(child)
+      if (child.name === "img") image = true
+    } else {
+      flush()
+      result.push(child)
+    }
+  }
+  flush()
+  node.children = result
+}
+
 // Browser email templates use a zero line height around adjacent images to
 // remove the small inline-image baseline gap. QTextDocument instead collapses
 // the whole row and paints the following block over those images.
@@ -1331,6 +1371,7 @@ function sanitize(html, options) {
 
       clean(child)
       keepImageRowOpen(child)
+      if (preserveFormatting) alignImageCell(child)
       survivors.push(child)
     }
     node.children = survivors
