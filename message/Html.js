@@ -999,16 +999,16 @@ function flattenPartsOf(node) {
 // down are not tables by the time this returns, and charging them against a
 // budget meant for competing column widths is what put the budget on the
 // wrong two levels in the first place.
-function flattenTablesIn(node, limit, depth) {
+function flattenTablesIn(node, limit, depth, keepLayout) {
   for (var i = 0; i < node.children.length; i++) {
     var child = node.children[i]
     if (child.type === "text") continue
     if (child.name !== "table") {
-      flattenTablesIn(child, limit, depth)
+      flattenTablesIn(child, limit, depth, keepLayout)
       continue
     }
-    var keep = depth < limit && (isGrid(child) || isCompactStatusTable(child))
-    flattenTablesIn(child, limit, keep ? depth + 1 : depth)
+    var keep = depth < limit && (keepLayout || isGrid(child) || isCompactStatusTable(child))
+    flattenTablesIn(child, limit, keep ? depth + 1 : depth, keepLayout)
     if (keep) continue
     flattenPartsOf(child)
     asBlock(child)
@@ -1045,8 +1045,8 @@ var HANDLER_ATTRIBUTE = /^on[a-z]+$/
 var CENTRED = /^center\b/i
 var ALIGNED_BY_COLUMN = { td: true, th: true }
 
-function cleanAttributes(node, keepColors, declarations) {
-  var uncentre = ALIGNED_BY_COLUMN[node.name] !== true
+function cleanAttributes(node, keepColors, declarations, keepAlignment) {
+  var uncentre = !keepAlignment && ALIGNED_BY_COLUMN[node.name] !== true
   var attrs = node.attrs
   var kept = attrs
   var dropped = false
@@ -1229,7 +1229,8 @@ function collapse(node) {
 function sanitize(html, options) {
   var settings = options || {}
   var source = String(html === undefined || html === null ? "" : html)
-  var keepColors = settings.keepColors === true
+  var preserveFormatting = settings.preserveFormatting === true
+  var keepColors = preserveFormatting || settings.keepColors === true
   var allowImages = settings.allowRemoteImages === true
   var imageData = settings.remoteImageData && typeof settings.remoteImageData === "object"
     ? settings.remoteImageData : null
@@ -1298,7 +1299,7 @@ function sanitize(html, options) {
       if (DROPPED_ELEMENTS[child.name] === true) continue
       // <center> is the same instruction spelled as an element, and Qt honours
       // it. As a plain box it is one more wrapper for `collapse` to fold away.
-      if (child.name === "center") child.name = "div"
+      if (child.name === "center" && !preserveFormatting) child.name = "div"
 
       // The style attribute is the only one worth parsing, and it is parsed
       // once per element: whether the sender marked this hidden and what
@@ -1324,7 +1325,7 @@ function sanitize(html, options) {
 
       promoteImageDimensions(child, declarations)
       promoteDirection(child, declarations)
-      cleanAttributes(child, keepColors, declarations)
+      cleanAttributes(child, keepColors, declarations, preserveFormatting)
 
       if (child.name === "img" && !keepImage(child)) continue
 
@@ -1360,7 +1361,11 @@ function sanitize(html, options) {
     : null
 
   clean(root)
-  if (settings.keepTables !== true) {
+  if (preserveFormatting) {
+    // Original retains layout tables, but never grants unbounded nesting to
+    // the synchronous Qt renderer. Reader was rebuilt independently above.
+    flattenTablesIn(root, MAX_TABLE_DEPTH, 0, true)
+  } else if (settings.keepTables !== true) {
     flattenTablesIn(root, settings.keepTableDepth === undefined
       ? KEEP_TABLE_DEPTH : Math.max(0, settings.keepTableDepth), 0)
   }
@@ -1732,7 +1737,7 @@ function documentFor(bodyHtml, colors) {
     // QTextDocument — so the side is chosen here rather than by the renderer.
     + "blockquote{color:" + quote + ";margin-" + quoteEdge + ":8px;padding-"
       + quoteEdge + ":8px;}"
-    + "td,th{padding:2px;}"
+    + (palette.preserveFormatting === true ? "" : "td,th{padding:2px;}")
     + (maxImage >= MIN_IMAGE_WIDTH ? "img{max-width:" + maxImage + "px;}" : "")
     + "</style></head><body" + baseDirectionAttribute(palette) + ">"
     + (pad > 0 ? "<div style=\"padding:" + pad + "px\">" : "")

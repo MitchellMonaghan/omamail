@@ -3,6 +3,32 @@ const { load, deepEqual } = require("./load")
 
 const html = load("message/Html.js")
 
+// Original keeps supported sender presentation; Reader remains a rebuild.
+{
+  const source = '<center><table bgcolor="#234567" cellpadding="12"><tr><td>'
+    + '<p align="center" style="color:#abcdef;text-align:center">Heading</p>'
+    + '<a href="https://example.com" style="background-color:#123456;color:#ffffff">Go</a>'
+    + '</td></tr></table></center>'
+  const before = html.sanitize(source, { withReader: true })
+  const original = html.sanitize(source, { preserveFormatting: true, withReader: true })
+  assert(original.html.includes('<center>'))
+  assert(original.html.includes('<table bgcolor="#234567" cellpadding="12">'))
+  assert(original.html.includes('align="center"'))
+  assert(original.html.includes('color:#abcdef'))
+  assert(original.html.includes('background-color:#123456'))
+  deepEqual(original.reader, before.reader)
+  assert(!html.documentFor(original.document, { preserveFormatting: true }).includes('td,th{padding:2px;}'))
+  const hostile = html.sanitize('<table background="https://example.com/track" bgcolor="#234567">'
+    + '<tr><td style="background-image:url(https://example.com/track);color:#abcdef" onclick="bad()">'
+    + '<script>bad()</script><img src="https://example.com/pixel"><a href="javascript:bad()">Go</a>'
+    + '</td></tr></table>', { preserveFormatting: true })
+  assert(!/background=|url\(|onclick|<script|<img|javascript:/i.test(hostile.html))
+  assert(hostile.html.includes('bgcolor="#234567"'))
+  const nested = '<table><tr><td>'.repeat(10) + 'Deep' + '</td></tr></table>'.repeat(10)
+  const bounded = html.sanitize(nested, { preserveFormatting: true })
+  assert.strictEqual(bounded.complexity.tableDepth, html.MAX_TABLE_DEPTH)
+}
+
 // =============================================================== the parser
 //
 // The gate is only as good as where it thinks a tag stops, so this is the part

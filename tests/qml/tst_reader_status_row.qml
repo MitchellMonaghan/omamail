@@ -20,6 +20,26 @@ Item {
     name: "ReaderStatusRow"
     when: windowShown
 
+    function test_original_keeps_layout_alignment() {
+      var source = '<table width="260" cellpadding="10" bgcolor="#234567"><tr>'
+        + '<td><p align="center">Centered</p></td></tr><tr><td>'
+        + '<table><tr><td>Left</td><td>Right</td></tr></table>'
+        + '</td></tr></table>'
+      var ready = Html.sanitize(source, { preserveFormatting: true, withReader: true })
+      document.width = 280
+      document.font.pixelSize = 13
+      document.text = Html.documentFor(ready.document, { preserveFormatting: true, maxImageWidth: 280 })
+      wait(0)
+      var plain = document.getText(0, document.length)
+      var center = document.positionToRectangle(plain.indexOf("Centered"))
+      var left = document.positionToRectangle(plain.indexOf("Left"))
+      var right = document.positionToRectangle(plain.indexOf("Right"))
+      verify(center.x > left.x + 20, "Sender's centered paragraph must stay centered")
+      compare(left.y, right.y, "Layout cells must remain beside each other")
+      verify(right.x > left.x)
+      verify(document.contentWidth <= document.width)
+    }
+
     function test_labels_stay_side_by_side_data() {
       return [
         { tag: "narrow", width: 280, size: 13 },
@@ -41,7 +61,7 @@ Item {
           + image + "\" width=\"28\" height=\"28\"></td>"
       }
       source += "</tr></table>"
-      var ready = Html.sanitize(source, { withReader: true })
+      var ready = Html.sanitize(source, { withReader: true, preserveFormatting: data.original === true })
       document.width = data.width
       document.font.pixelSize = data.size
       document.text = data.original

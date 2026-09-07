@@ -1274,6 +1274,7 @@ Item {
       : RenderCache.get(renderCache, selectedId, sourceHtml, withPlainText)
     if (!ready) {
       ready = Html.sanitize(sourceHtml, ({
+        preserveFormatting: true,
         allowRemoteImages: remoteImagesAllowed,
         remoteImageData: remoteImagesAllowed ? remoteImageData : null,
         withPlainText: withPlainText,

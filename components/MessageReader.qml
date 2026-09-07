@@ -591,6 +591,7 @@ Item {
           }))
         : (root.shownMode === "original"
           ? Html.documentFor(root.bodyDocument ? root.bodyDocument : root.rawHtml, ({
+              preserveFormatting: true,
               foreground: root.textColor,
               background: root.backgroundColor,
               link: root.linkColor,
