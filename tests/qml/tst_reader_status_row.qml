@@ -20,6 +20,30 @@ Item {
     name: "ReaderStatusRow"
     when: windowShown
 
+    function test_original_image_painted_centered() {
+      // Opaque red pixel: inspect actual painting, not cursor geometry.
+      var source = '<table width="260" cellspacing="0" cellpadding="0"><tr>'
+        + '<td style="text-align:center"><img width="80" height="40" src="'
+        + 'data:image/gif;base64,R0lGODlhAQABAIAAAP8AAP8AACwAAAAAAQABAAACAUwAOw=='
+        + '"></td></tr></table>'
+      var ready = Html.sanitize(source, { preserveFormatting: true })
+      document.width = 280
+      document.text = Html.documentFor(ready.document, { preserveFormatting: true, maxImageWidth: 280 })
+      waitForRendering(document)
+      var pixels = grabImage(document)
+      var first = -1
+      var last = -1
+      for (var x = 0; x < pixels.width; x++) {
+        var color = pixels.pixel(x, 20)
+        if (color.r > 0.9 && color.g < 0.1 && color.b < 0.1) {
+          if (first < 0) first = x
+          last = x
+        }
+      }
+      verify(first >= 80 && first <= 105, "Painted image starts at " + first)
+      verify(last - first >= 75)
+    }
+
     function test_original_css_image_centering() {
       // A 640x320 canvas displayed at 40px high, like a height-only hero image.
       var image = 'data:image/gif;base64,R0lGODlhgAJAAYAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'

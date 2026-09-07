@@ -1162,6 +1162,22 @@ function alignImageCell(node) {
   var run = []
   var image = false
   function flush() {
+    // Qt Quick 6.11 paints a leading image at the line origin even though its
+    // cursor rectangle includes the paragraph alignment. A real spacing glyph
+    // before it makes the image follow the aligned glyph run. A zero-width
+    // character does not create that run. Keep this nonbreaking spacer tiny,
+    // and add it only where an image leads a centered/right-aligned paragraph.
+    if (image && (alignment === "center" || alignment === "right")) {
+      for (var p = 0; p < run.length; p++) {
+        if (run[p].type === "text" && /^\s*$/.test(decodeReferences(run[p].text))) continue
+        if (run[p].name === "img") run.splice(p, 0, {
+          type: "element", name: "span",
+          attrs: [{ name: "style", value: "font-size:1px" }],
+          children: [{ type: "text", text: "\u00a0" }]
+        })
+        break
+      }
+    }
     if (image) result.push({ type: "element", name: "div", attrs: [
       { name: "align", value: alignment }
     ], children: run })

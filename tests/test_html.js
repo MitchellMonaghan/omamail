@@ -10,7 +10,7 @@ const html = load("message/Html.js")
     + '</td></tr></table>'
   const before = html.sanitize(source, { withReader: true })
   const after = html.sanitize(source, { preserveFormatting: true, withReader: true })
-  assert(after.html.includes('<div align="center"> <img'))
+  assert(after.html.includes('<div align="center"> <span style="font-size:1px">\u00a0</span><img'))
   assert(after.html.includes('background-color:#ffffff'))
   deepEqual(before.reader, after.reader)
   for (const align of ['left', 'right', 'justify']) {
