@@ -25,7 +25,10 @@ Item {
         { tag: "narrow", width: 280, size: 13 },
         { tag: "wide", width: 700, size: 13 },
         { tag: "narrow-zoom", width: 280, size: 20 },
-        { tag: "wide-labels", width: 280, size: 20, suffix: "WWW" }
+        { tag: "wide-labels", width: 280, size: 20, suffix: "WWW" },
+        { tag: "original-narrow", width: 280, size: 13, original: true },
+        { tag: "original-wide", width: 700, size: 13, original: true },
+        { tag: "original-zoom", width: 280, size: 20, original: true }
       ]
     }
 
@@ -41,7 +44,9 @@ Item {
       var ready = Html.sanitize(source, { withReader: true })
       document.width = data.width
       document.font.pixelSize = data.size
-      document.text = Html.readerDocumentFor(ready.reader.document, { fontSize: data.size })
+      document.text = data.original
+        ? Html.documentFor(ready.document, { maxImageWidth: 200, compact: true })
+        : Html.readerDocumentFor(ready.reader.document, { fontSize: data.size })
       wait(1)
       var plain = document.getText(0, document.length)
       var first = document.positionToRectangle(plain.indexOf("A"))

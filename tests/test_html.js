@@ -1498,22 +1498,37 @@ function activityMail() {
   assert.strictEqual((strip.match(/<td\b/g) || []).length, 7)
   assert.strictEqual((strip.match(/<br>/g) || []).length, 7)
   assert.strictEqual((strip.match(/<img\b/g) || []).length, 7)
+  const originalStrip = html.sanitize(statusStrip, { allowRemoteImages: true }).html
+  assert.strictEqual((originalStrip.match(/<td\b/g) || []).length, 7,
+    'Original mode must preserve the compact icon row too')
   const hostileStrip = statusStrip.replace(/<td>/g,
     '<td align="right" background="https://private.example/b.gif" '
     + 'style="padding:999px;background-image:url(https://private.example/b.gif)">')
   assert.strictEqual(reading(hostileStrip, { allowRemoteImages: true }).html, strip,
     'The generated layout must not copy sender attributes')
+  const originalHostile = html.sanitize(hostileStrip, { allowRemoteImages: true }).html
+  assert.ok(!originalHostile.includes('background='))
+  assert.ok(!originalHostile.includes('url('))
   assert.ok(!reading(statusStrip.replace(/https:\/\/cdn.example.com\/status.png/g,
     'http://127.0.0.1/private.png'), { allowRemoteImages: true }).html.includes('<img'))
   // Blocked pictures do not gain a new path out through a generated table.
   const blockedStrip = reading(statusStrip).html
   assert.ok(!blockedStrip.includes('<img'))
   assert.ok(!blockedStrip.includes('<table'))
+  assert.ok(!html.sanitize(statusStrip).html.includes('<img'))
+  const wrappedStrip = '<table><tr><td>' + statusStrip + '</td></tr></table>'
+  assert.strictEqual(html.sanitize(wrappedStrip, { allowRemoteImages: true }).complexity.tables, 1,
+    'Only the status table survives, not its enclosing layout')
+  assert.strictEqual(html.sanitize(statusStrip, {
+    allowRemoteImages: true, keepTableDepth: 0 }).complexity.tables, 0,
+    'The existing table-depth bound still applies')
   // Long copy, large artwork and wide strips remain ordinary flowing blocks.
   for (const cells of [statusCell('Long description').repeat(2),
     statusCell('1', 200).repeat(2), statusCell('1', 80).repeat(7),
     statusCell('1').repeat(9)]) {
     assert.ok(!reading('<table><tr>' + cells + '</tr></table>',
+      { allowRemoteImages: true }).html.includes('<table'))
+    assert.ok(!html.sanitize('<table><tr>' + cells + '</tr></table>',
       { allowRemoteImages: true }).html.includes('<table'))
   }
 

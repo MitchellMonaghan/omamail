@@ -937,6 +937,45 @@ function isGrid(node) {
   return false
 }
 
+// Original mode also needs a compact status strip's column relationships.
+// This runs after cleaning: preserve only one row of short labels and bounded
+// icons, never a surrounding card or nested layout table. Resource policy is
+// still decided by clean(), independently of whether the table survives.
+function isCompactStatusTable(node) {
+  var rows = rowsOf(node, [])
+  if (rows.length !== 1) return false
+  var cells = rows[0].children.filter(function(child) { return child.type !== "text" })
+  if (cells.length < 2 || cells.length > MAX_READER_TABLE_COLUMNS) return false
+  var width = 0
+  for (var i = 0; i < cells.length; i++) {
+    if (cells[i].name !== "td" && cells[i].name !== "th") return false
+    var content = { text: "", images: 0, width: 0 }
+    if (!statusCellContent(cells[i], content)) return false
+    var label = decodeReferences(content.text).replace(SOURCE_WHITESPACE, " ")
+      .replace(/^ +| +$/g, "")
+    if (label.length < 1 || label.length > 4 || content.images !== 1) return false
+    width += content.width + 4
+  }
+  return width <= 256
+}
+
+function statusCellContent(node, content) {
+  for (var i = 0; i < node.children.length; i++) {
+    var child = node.children[i]
+    if (child.type === "text") content.text += child.text
+    else if (child.name === "img") {
+      var width = readerStatusIconWidth(child)
+      if (width === 0) return false
+      content.width += width
+      content.images++
+    } else {
+      if (!/^(div|span|p|b|strong|em|i|a|br)$/.test(child.name)) return false
+      if (!statusCellContent(child, content)) return false
+    }
+  }
+  return true
+}
+
 // What is worth keeping off a table that was the layout is the styling that
 // rode on it, not the table semantics.
 function asBlock(node) {
@@ -968,7 +1007,7 @@ function flattenTablesIn(node, limit, depth) {
       flattenTablesIn(child, limit, depth)
       continue
     }
-    var keep = depth < limit && isGrid(child)
+    var keep = depth < limit && (isGrid(child) || isCompactStatusTable(child))
     flattenTablesIn(child, limit, keep ? depth + 1 : depth)
     if (keep) continue
     flattenPartsOf(child)
