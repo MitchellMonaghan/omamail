@@ -1008,12 +1008,16 @@ Item {
 
   // --------------------------------------------------------------- detail
 
-  function select(id) {
+  // True when the selected message is only a cursor preview.
+  property bool selectionIsPreview: false
+
+  function select(id, previewOnly) {
     var messageId = String(id || "")
     if (messageId === "") {
       clearSelection()
       return
     }
+    selectionIsPreview = previewOnly === true
     selectedId = messageId
     var serial = ++detailSerial
     abortRequest(detailHandle)
@@ -1028,7 +1032,7 @@ Item {
     selectedReaderEmpty = true
     selectedReaderRemoteImages = 0
     sourceHtml = ""
-    remoteImagesAllowed = alwaysShowImages
+    remoteImagesAllowed = Model.showsRemoteImages(alwaysShowImages, selectionIsPreview)
     remoteImagesLoading = false
     remoteImageData = ({})
     selectedRemoteImageSources = []
@@ -1161,10 +1165,17 @@ Item {
         Conversation.threadAfterSelect(root.selectedThread, messageId, summary)
       root.rememberMember(summary)
       root.loadMembers()
-      // Opening a message is the one place Gmail's own clients mark it read
-      // without being asked, and a reader that leaves it bold is confusing.
-      if (summary.unread) root.act(messageId, "markRead", true)
+      // A preview is not opening; only an opened message is marked read here.
+      if (Model.marksReadOnArrival(summary, root.selectionIsPreview))
+        root.act(messageId, "markRead", true)
     })
+  }
+
+  // Mark the message the dwell started on, if it is still unread.
+  function markPreviewRead(id) {
+    if (!Model.previewReadable(messages, id)) return false
+    act(String(id), "markRead", true)
+    return true
   }
 
   // ---------------------------------------------------------- the rail

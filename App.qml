@@ -431,6 +431,14 @@ Item {
 
   function close() {
     closingFromHost = true
+    // A window that is gone shows nothing, so a dwell counting down in it —
+    // or a fetch about to be asked for — has nothing left to be for.
+    markReadDwell.stop()
+    previewSettle.stop()
+    // Escape at the list root closes the window without clearing what the
+    // cursor had previewed, so it reopened showing a stale message beside the
+    // list. A preview is not a place the window was left in.
+    if (service && service.selectionIsPreview) service.clearSelection()
     if (compose.opened || compose.parkedForSend) saveComposeRecovery()
     opened = false
     if (service) service.windowOpen = false
@@ -446,6 +454,9 @@ Item {
   // override is a per-message decision about one specific message and does not.
   function openMessage(id) {
     if (!service) return
+    // Opening marks it read itself, so a dwell still counting down for the
+    // same message has nothing left to do.
+    markReadDwell.stop()
     pendingComposeMode = ""
     pendingDraftId = ""
     reader.forceRichAnyway = false
@@ -538,9 +549,133 @@ Item {
     if (next === "") return
     cursorId = next
     revealCursorRow()
-    // Moving is not opening. This used to open whatever it landed on while the
-    // reader was up, which made stepping through a list a way to mark half of
-    // it read without having looked at any of it. Enter and "o" open.
+    previewCursor()
+  }
+
+  // Whether there is a preview on screen to be talking about.
+  //
+  // Never in a narrow window: there the reader takes the list's place, so
+  // every press would navigate away from the list being moved through and
+  // there would be nothing left to move. Never over a page, a draft or the
+  // calendar either, for the same reason — the list is not what is on screen.
+  //
+  // Asked twice, when the cursor moves and again when the dwell fires, because
+  // every part of it can change in between: a page opens, a draft is started,
+  // the window is dragged across the breakpoint. A message that is no longer
+  // being shown is not a message being read, however long the cursor has sat
+  // on its row.
+  // #83's label picker is an `anchors.fill` overlay rather than a nav entry, so
+  // none of the state above notices it. Pressing `v` during a dwell otherwise
+  // let the timer mark read a message that was about to be moved.
+  readonly property bool canPreview: !!service && service.previewOnCursor
+    && !compact && !showPage && !composing && !calendarVisible
+    && !labelPicker.opened
+
+  // Moving is not opening, and this is the difference.
+  //
+  // It used to open whatever it landed on, which made stepping through a list
+  // a way to mark half of it read without having looked at any of it. So the
+  // preview is off unless it was asked for, it pushes no history — Escape and
+  // Back mean what they meant — and it does not mark anything read. A dwell
+  // does that, which is what stops a held arrow key from reading a mailbox.
+  function previewCursor() {
+    markReadDwell.stop()
+    markReadDwell.dwelledOn = ""
+    previewSettle.stop()
+    if (!canPreview || cursorId === "") return
+    // A message already open stays open on its own terms: it was opened, and
+    // re-selecting it as a preview would take back the read mark it earned.
+    //
+    // A *preview* of the same message is not that. Moving away and back
+    // inside the settle stops the dwell above and used to return here, so the
+    // message the cursor was sitting on never became read at all — the id
+    // matched, which is exactly what a preview does while not being open.
+    if (currentView === "reader" && service.selectedId === cursorId
+      && !service.selectionIsPreview) return
+    // Per message, the same as opening one. Insisting on a document the bounds
+    // refused is an answer about the message it was given for, and the row the
+    // cursor moved to is a different message.
+    reader.forceRichAnyway = false
+    // Settled rather than fetched per keystroke. A held `j` starts a request
+    // for every row it crosses, and on IMAP each one is a curl process, a TLS
+    // handshake and a LOGIN — thirty rows was thirty connections, spawned and
+    // killed as the key repeated. Cancellation was already correct; this is
+    // about not asking. Short enough that a deliberate move still feels
+    // immediate, long enough that a repeat rate never gets through.
+    previewSettle.wanted = cursorId
+    previewSettle.restart()
+  }
+
+  Timer {
+    id: previewSettle
+    property string wanted: ""
+    interval: 180
+    repeat: false
+    onTriggered: root.previewSettled()
+  }
+
+  function previewSettled() {
+    var id = previewSettle.wanted
+    previewSettle.wanted = ""
+    // The cursor may have moved on, or left the state that allows a preview
+    // at all, in the time this waited.
+    if (id === "" || id !== cursorId || !canPreview) return
+    if (currentView === "reader" && service.selectedId === id
+      && !service.selectionIsPreview) return
+    // Coming back to the message that is still the preview restarts its
+    // dwell rather than asking for it again.
+    if (service.selectedId !== id || !service.selectionIsPreview)
+      service.select(id, true)
+    markReadDwell.dwelledOn = id
+    armReadDwell()
+  }
+
+  // Whether the previewed message is actually on screen.
+  //
+  // The dwell measures time spent looking at something, so it cannot start
+  // before there is anything to look at. It began when the request went out,
+  // so a slow fetch spent the whole dwell loading and marked read a message
+  // whose body never appeared — worst at a zero dwell, which marked it read
+  // before the request had even been made. A fetch that fails never paints,
+  // so it never arms this at all.
+  readonly property bool previewShowing: !!service
+    && service.detailPainted && !service.detailLoading
+
+  onPreviewShowingChanged: if (previewShowing) armReadDwell()
+
+  function armReadDwell() {
+    if (!service || markReadDwell.dwelledOn === "") return
+    if (!canPreview || !previewShowing) return
+    // Still the message on screen: a search and a mailbox switch both drop the
+    // selection without moving the cursor off the row.
+    if (service.selectedId !== markReadDwell.dwelledOn) return
+    if (service.markReadDelaySec <= 0) {
+      var now = markReadDwell.dwelledOn
+      markReadDwell.dwelledOn = ""
+      service.markPreviewRead(now)
+      return
+    }
+    markReadDwell.interval = service.markReadDelaySec * 1000
+    markReadDwell.restart()
+  }
+
+  // A previewed message counts as read once the cursor has stayed on it. The
+  // id is held rather than read back off the cursor when this fires: by then
+  // the cursor may have moved on, and the message that was read is the one to
+  // mark.
+  Timer {
+    id: markReadDwell
+    property string dwelledOn: ""
+    repeat: false
+    onTriggered: {
+      if (!root.service || dwelledOn === "") return
+      if (!root.canPreview) return
+      if (root.cursorId !== dwelledOn) return
+      // And it has to still be the message on screen: a search and a mailbox
+      // switch both drop the selection without moving the cursor off the row.
+      if (root.service.selectedId !== dwelledOn) return
+      root.service.markPreviewRead(dwelledOn)
+    }
   }
 
   // An answer needs the message it is answering, and opening one only starts
@@ -623,7 +758,12 @@ Item {
   function composeFromCursor(mode) {
     if (!service || cursorId === "") return
     pendingComposeReturnTo = Nav.depth(nav)
-    if (service.selectedId !== cursorId) openMessage(cursorId)
+    // A preview satisfies the id test while pushing no `reader` entry, so
+    // without the second half `r` on a previewed row answered a message that
+    // was never opened: nothing marked it read, and closing the draft landed
+    // on the list instead of on the message being answered.
+    if (service.selectedId !== cursorId || service.selectionIsPreview)
+      openMessage(cursorId)
     startCompose(mode)
   }
 
@@ -739,7 +879,12 @@ Item {
     // showing a member of the acted row rather than the row itself, and
     // archiving from a member has to open the next row or go back rather than
     // leave a message that has just moved on screen.
-    var wasOpen = currentView === "reader"
+    //
+    // And a preview is not open at all. It satisfies "is this the selected
+    // one" without having been opened, which made `e` on a previewed row call
+    // `openMessage` on the *next* one — an archive that reads a message, which
+    // is the fault this feature exists to avoid.
+    var wasOpen = currentView === "reader" && !service.selectionIsPreview
       && (service.selectedId === acted || Model.rowHoldsMember(row, service.selectedId))
     // Worked out before the action, while the row still has neighbours.
     var next = Model.cursorAfterRemoval(service.messages, acted)
