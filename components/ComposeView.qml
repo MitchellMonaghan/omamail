@@ -79,6 +79,39 @@ DropArea {
   // Where answers should go when that is not the sender. Hidden like Bcc
   // until asked for: most mail has no use for it.
   property bool replyToVisible: false
+
+  // The agent's card over this draft: whether it is up, working, or wants
+  // the owner — all facts the window passes down.
+  property bool agentOpen: false
+  property bool agentWorking: false
+  property bool agentAttention: false
+  signal agentRequested(real sceneX, real sceneY)
+
+  // What the agent is handed, and how its answer lands. Replacing the body
+  // counts as an edit — it is one — so the signature is not placed over it.
+  property string draftKey: newDraftKey()
+  function newDraftKey() { return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) }
+  function currentFields() {
+    return ({ to: toField.text, subject: subjectField.text, body: bodyEdit.text,
+      from: fromEmail, accountId: accountId, draftId: sourceDraftId, draftKey: draftKey })
+  }
+
+  function replaceBody(text) {
+    bodyEdit.remove(0, bodyEdit.length)
+    bodyEdit.insert(0, String(text || ""))
+    bodyWasEdited = true
+    bodyEdit.cursorPosition = bodyEdit.length
+    noteDraftChanged()
+  }
+
+  function insertAtCursor(text) {
+    var insert = String(text || "")
+    if (insert === "") return
+    var at = Math.max(0, Math.min(bodyEdit.length, bodyEdit.cursorPosition))
+    bodyEdit.insert(at, insert)
+    bodyWasEdited = true
+    noteDraftChanged()
+  }
   property string fromEmail: ""
   property var replyRecipients: []
   property bool fromWasChosen: false
@@ -156,6 +189,7 @@ DropArea {
   }
 
   function clearCurrentDraft(forgetAttachments) {
+    draftKey = newDraftKey()
     forwardLoadSerial++
     fromMenu.close()
     // Both of these live in the window overlay, and this view is hidden rather
@@ -217,6 +251,7 @@ DropArea {
 
   function snapshotDraft() {
     return ({
+      draftKey: draftKey,
       to: toField.text,
       cc: ccField.text,
       bcc: bccField.text,
@@ -243,6 +278,7 @@ DropArea {
 
   function restoreDraft(draft) {
     var saved = draft || ({})
+    draftKey = String(saved.draftKey || newDraftKey())
     mode = String(saved.mode || "new")
     accountId = String(saved.accountId || "")
     sourceDraftId = String(saved.sourceDraftId || "")

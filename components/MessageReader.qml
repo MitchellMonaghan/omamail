@@ -52,9 +52,15 @@ Item {
   signal composeRequested(string mode)
   signal mailtoRequested(string url)
   signal actionRequested(string action)
+  signal agentRequested(real sceneX, real sceneY)
   // A right-click on the From line or the To line: the addresses on it, and
   // where the menu goes. What is done with them is the window's decision.
   signal addressMenuRequested(var addresses, real sceneX, real sceneY)
+  // Whether the agent popup is up for this message, and whether a job is
+  // running on it — passed down like every other fact the reader draws.
+  property bool agentOpen: false
+  property bool agentWorking: false
+  property bool agentAttention: false
 
   // ------------------------------------------------------- the conversation
 
