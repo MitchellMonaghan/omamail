@@ -116,6 +116,8 @@ Item {
     function test_labels_stay_side_by_side_data() {
       return [
         { tag: "narrow", width: 280, size: 13 },
+        { tag: "linked-narrow", width: 280, size: 13, linked: true },
+        { tag: "linked-zoom", width: 280, size: 20, linked: true },
         { tag: "wide", width: 700, size: 13 },
         { tag: "narrow-zoom", width: 280, size: 20 },
         { tag: "wide-labels", width: 280, size: 20, suffix: "WWW" },
@@ -134,6 +136,8 @@ Item {
           + image + "\" width=\"28\" height=\"28\"></td>"
       }
       source += "</tr></table>"
+      if (data.linked) source = '<a href="https://example.com/game"><table><tr><td>'
+        + source + '</td></tr></table></a>'
       var ready = prepare(source, { withReader: true, preserveFormatting: data.original === true })
       document.width = data.width
       document.font.pixelSize = data.size

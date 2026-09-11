@@ -388,20 +388,30 @@ fn row(n: &Node, s: &mut State, ctx: &mut Images<'_>, tables: bool) -> bool {
         if c.kind == "text" {
             continue;
         }
+        if hidden_reader(c) {
+            continue;
+        }
         if !matches!(c.name.as_str(), "td" | "th") || !heading(c).is_empty() {
             return false;
         }
-        if !furniture(c) {
+        if !s.chain.is_empty() || !furniture(c) {
             cells.push(c)
         }
     }
     let built = cells
         .into_iter()
-        .map(|c| build(c, ctx, tables))
+        .map(|c| build_in_chain(c, ctx, tables, &s.chain))
         .collect::<Vec<_>>();
     if tables && let Some(status) = status_row(&built) {
         s.flush("p");
         s.blocks.push(status);
+        return true;
+    }
+    // Only compact status strips change layout inside an existing link/style.
+    // Keep the old block boundaries for other linked rows, without walking twice.
+    if !s.chain.is_empty() {
+        s.flush("p");
+        s.blocks.extend(built.into_iter().flatten());
         return true;
     }
     let eligible = built
@@ -611,7 +621,7 @@ fn node(n: &Node, s: &mut State, ctx: &mut Images<'_>, tables: bool) {
             s.flush("p")
         }
         _ => {
-            if name == "tr" && s.chain.is_empty() && row(n, s, ctx, tables) {
+            if name == "tr" && row(n, s, ctx, tables) {
                 return;
             }
             if table_part(name)
@@ -660,7 +670,15 @@ fn node(n: &Node, s: &mut State, ctx: &mut Images<'_>, tables: bool) {
     }
 }
 fn build(n: &Node, ctx: &mut Images<'_>, tables: bool) -> Vec<Node> {
+    build_in_chain(n, ctx, tables, &[])
+}
+fn build_in_chain(n: &Node, ctx: &mut Images<'_>, tables: bool, chain: &[Node]) -> Vec<Node> {
     let mut s = State::default();
+    for parent in chain {
+        let mut wrapper = Node::element(&parent.name);
+        wrapper.attrs = parent.attrs.clone();
+        s.open(wrapper);
+    }
     walk(n, &mut s, ctx, tables);
     s.flush("p");
     s.blocks

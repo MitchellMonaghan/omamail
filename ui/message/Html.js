@@ -2450,12 +2450,9 @@ function readerDataTable(node, ctx) {
 
 // A row of a layout table is a line, not a stack.
 //
-// Every cell made into a block of its own is exactly what turns an avatar, a
-// name and "moved 4 cards" into three paragraphs — the loose vertical stream a
-// reading mode exists to stop producing. So a row whose cells each hold one
-// short run of inline content becomes one line, and a row holding anything
-// larger or more structured than that keeps the blocks, because at that size
-// the cells really were the sender stacking things up.
+// Short cells may share a line; structured cells keep their blocks. Inside an
+// inherited link/style only bounded status strips change layout, and rebuilt
+// cells inherit the already-checked inline wrappers so links remain clickable.
 //
 // Both answers come out of one walk over the cells, and that is not a tidiness
 // point. Building the cells to find out and then walking them again to lay them
@@ -2479,28 +2476,36 @@ function readerBroken(children) {
 }
 
 function readerRow(node, state, ctx) {
-  // Everything that can refuse a row is asked before anything is built.
+  // Reject before building.
   var cells = []
   for (var i = 0; i < node.children.length; i++) {
     var cell = node.children[i]
     if (cell.type === "text") continue
+    if (readerHidden(cell)) continue
     if (cell.name !== "td" && cell.name !== "th") return false
     // A cell the sender set heading type on is a heading, and joining the row
     // would walk past the one piece of evidence there is for that.
     if (readerHeadingOf(cell) !== "") return false
     // The "|" between two links is the sender drawing a line, not something
     // anybody reads out. In a row of its own it is all that is left of one.
-    if (readerFurniture(cell)) continue
+    if (state.chain.length === 0 && readerFurniture(cell)) continue
     cells.push(cell)
   }
 
   var built = []
-  for (var j = 0; j < cells.length; j++) built.push(readerBuild(cells[j], ctx))
+  for (var j = 0; j < cells.length; j++) built.push(readerBuild(cells[j], ctx, state.chain))
 
   var statusRow = ctx.tables ? readerStatusRow(built) : null
   if (statusRow !== null) {
     readerFlush(state, "p")
     state.blocks.push(statusRow)
+    return true
+  }
+
+  if (state.chain.length > 0) {
+    readerFlush(state, "p")
+    for (var b = 0; b < built.length; b++)
+      for (var c = 0; c < built[b].length; c++) state.blocks.push(built[b][c])
     return true
   }
 
@@ -2704,10 +2709,8 @@ function readerNode(child, state, ctx) {
     return
   }
 
-  // Only with nothing open around it, for the same reason the heading below
-  // says so: joining a row recurses into a document of its own, and a link
-  // opened outside it would not survive that.
-  if (name === "tr" && state.chain.length === 0 && readerRow(child, state, ctx)) return
+  // Row cells inherit checked inline wrappers, including an enclosing link.
+  if (name === "tr" && readerRow(child, state, ctx)) return
 
   if (TABLE_PARTS[name] === true || READER_BLOCK[name] === true) {
     // Only with nothing open around it. Inferring a heading recurses into a
@@ -2752,8 +2755,13 @@ function readerPreText(node, out) {
   return out
 }
 
-function readerBuild(node, ctx) {
+function readerBuild(node, ctx, chain) {
   var state = readerState()
+  for (var i = 0; i < (chain || []).length; i++) {
+    var wrapper = readerElement(chain[i].name)
+    wrapper.attrs = chain[i].attrs
+    readerOpen(state, wrapper)
+  }
   readerWalk(node, state, ctx)
   readerFlush(state, "p")
   return state.blocks

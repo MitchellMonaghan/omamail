@@ -3,6 +3,34 @@ const { load, deepEqual } = require("./load")
 
 const html = load("message/Html.js")
 
+// A newsletter can make the entire status strip one link. Keep its checked
+// destination on each rebuilt label/icon, including across nested layout cells.
+{
+  const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+  const strip = '<table><tr>' + Array.from({length: 7}, (_, i) =>
+    '<td><div>' + i + '</div><img width="28" height="28" src="' + image + '"></td>').join('') + '</tr></table>'
+  const nested = '<table><tr><td>' + strip + '</td></tr></table>'
+  for (const wrapper of ['a href="https://example.com/game"', 'b']) {
+    for (const hidden of ['hidden', 'style="display:none"']) {
+      const source = '<' + wrapper + '><table><tr><td ' + hidden
+        + '>HIDDEN</td><td>Visible</td></tr></table></' + wrapper.split(' ')[0] + '>'
+      const reader = html.sanitize(source, {withReader: true}).reader.html
+      assert(!reader.includes('HIDDEN'), 'row rebuilding must still hide the cell itself')
+      assert(reader.includes('Visible'))
+    }
+  }
+  for (const destination of ['https://example.com/game', 'javascript:bad()']) {
+    const safe = destination.startsWith('https:')
+    const result = html.sanitize('<a href="' + destination + '"><p>Before</p>' + nested + '<p>After</p></a>', {withReader: true}).reader.html
+    assert.strictEqual((result.match(/<table/g) || []).length, 1, 'linked status strip stays horizontal')
+    assert.strictEqual((result.match(/<td /g) || []).length, 7)
+    assert.strictEqual((result.match(/<img /g) || []).length, 7)
+    assert(result.includes('Before') && result.includes('After'))
+    assert.strictEqual((result.match(/href="https:\/\/example.com\/game"/g) || []).length, safe ? 16 : 0)
+    assert(!result.includes('javascript:'))
+  }
+}
+
 {
   const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
   const source = '<table><tr><td style="text-align:center;background-color:#ffffff">'
