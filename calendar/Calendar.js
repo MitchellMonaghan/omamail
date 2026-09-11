@@ -721,18 +721,51 @@ function googleEventUrl(eventId) {
 // The scheme and authority of an HTTPS URL. Anything else — http, a bare
 // path, junk — has no authority here, because a write address is HTTPS or
 // nothing.
+function httpsAuthority(url) {
+  var text = String(url || "")
+  if (text === "" || /\s/.test(text)) return null
+  var match = /^(https):\/\/([^\/?#]+)/i.exec(text)
+  if (!match) return null
+  var authority = match[2]
+  var at = authority.lastIndexOf("@")
+  if (at >= 0) authority = authority.substring(at + 1)
+  var host = ""
+  var port = ""
+  if (authority.charAt(0) === "[") {
+    var close = authority.indexOf("]")
+    if (close < 0) return null
+    host = authority.substring(0, close + 1).toLowerCase()
+    var rest = authority.substring(close + 1)
+    if (rest !== "" && rest.charAt(0) !== ":") return null
+    port = rest === "" ? "" : rest.substring(1)
+  } else {
+    var colon = authority.lastIndexOf(":")
+    if (colon >= 0) {
+      host = authority.substring(0, colon).toLowerCase()
+      port = authority.substring(colon + 1)
+    } else {
+      host = authority.toLowerCase()
+    }
+  }
+  if (host === "" || host === "[]") return null
+  if (port !== "" && !/^[0-9]{1,5}$/.test(port)) return null
+  if (port !== "" && (Number(port) < 1 || Number(port) > 65535)) return null
+  return { host: host, port: port === "" ? "443" : String(Number(port)) }
+}
+
 function urlAuthority(url) {
-  var match = /^(https):\/\/([^\/?#]+)/i.exec(String(url || ""))
-  return match ? match[1].toLowerCase() + "://" + match[2] : ""
+  var parts = httpsAuthority(url)
+  if (!parts) return ""
+  return parts.port === "443"
+    ? "https://" + parts.host
+    : "https://" + parts.host + ":" + parts.port
 }
 
 // scheme://host:port with the port made explicit and the case-insensitive
 // parts folded, so two spellings of the same origin compare equal.
 function urlOrigin(url) {
-  var match = /^(https):\/\/([^\/?#:]+)(?::(\d+))?/i.exec(String(url || ""))
-  if (!match) return ""
-  return match[1].toLowerCase() + "://" + match[2].toLowerCase() + ":"
-    + (match[3] ? String(Number(match[3])) : "443")
+  var parts = httpsAuthority(url)
+  return parts ? "https://" + parts.host + ":" + parts.port : ""
 }
 
 // A REPORT answers with the event's own href, which the server may write as a
@@ -748,19 +781,22 @@ function caldavEventUrl(sourceUrl, event) {
   if (origin === "") return ""
   var href = String(event && event.href || "")
   if (/\s/.test(href)) return ""
+  var resolved = ""
   if (/^https:\/\//i.test(href) || href.substring(0, 2) === "//") {
     var candidate = href.substring(0, 2) === "//" ? "https:" + href : href
-    return urlOrigin(candidate) === origin ? candidate : ""
-  }
-  if (href.charAt(0) === "/") return urlAuthority(base) + href
-  if (href !== "") {
+    resolved = candidate.replace(/^(https:\/\/)[^\/?#]*@/i, "$1")
+  } else if (href.charAt(0) === "/") {
+    resolved = urlAuthority(base) + href
+  } else if (href !== "") {
     var collection = base.charAt(base.length - 1) === "/" ? base : base + "/"
-    return collection + href
+    resolved = collection + href
+  } else {
+    var uid = String(event && event.uid || "")
+    if (uid === "") return ""
+    var root = base.charAt(base.length - 1) === "/" ? base : base + "/"
+    resolved = root + encodeURIComponent(uid) + ".ics"
   }
-  var uid = String(event && event.uid || "")
-  if (uid === "") return ""
-  var root = base.charAt(base.length - 1) === "/" ? base : base + "/"
-  return root + encodeURIComponent(uid) + ".ics"
+  return urlOrigin(resolved) === origin ? resolved : ""
 }
 
 function compareEvents(left, right) {
