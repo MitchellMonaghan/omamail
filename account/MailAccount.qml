@@ -1343,7 +1343,7 @@ Item {
     var source = String(queue.shift())
     imageFetchQueue = queue
     var request = imageFetchComponent.createObject(root, {
-      command: ["python3", pluginDir + "/scripts/image-fetch.py"],
+      command: ["python3", pluginDir + "/scripts/image_fetch.py"],
       requestLine: Mail.encodeBase64(source)
     })
     imageFetchProcess = request
@@ -1363,6 +1363,41 @@ Item {
         root.renderSource(root.sourceHtml)
       }
       root.fetchNextImage(serial)
+    })
+    request.running = true
+  }
+
+  // One picture, for the plain-text marker. The standing "always show"
+  // answer is a different question: this is the reader asking for this
+  // source, and the bytes still come through the public-host worker so Qt
+  // never sees the address.
+  function fetchDisplayImage(source, callback) {
+    var wanted = String(source || "")
+    var done = typeof callback === "function" ? callback : function() {}
+    if (Html.isRasterDataImage(wanted)) {
+      done(wanted)
+      return
+    }
+    if (remoteImageData && Object.prototype.hasOwnProperty.call(remoteImageData, wanted)
+      && Html.isRasterDataImage(String(remoteImageData[wanted] || ""))) {
+      done(String(remoteImageData[wanted]))
+      return
+    }
+    if (Html.imageSourceKind(wanted) !== "remote") {
+      done("")
+      return
+    }
+    var request = imageFetchComponent.createObject(root, {
+      command: ["python3", pluginDir + "/scripts/image_fetch.py"],
+      requestLine: Mail.encodeBase64(wanted)
+    })
+    if (!request) {
+      done("")
+      return
+    }
+    request.finished.connect(function(data) {
+      request.destroy()
+      done(data)
     })
     request.running = true
   }
@@ -2477,7 +2512,7 @@ Item {
       }
       onExited: function(exitCode) {
         var data = String(imageFetchRequest.stdout.text || "").trim()
-        imageFetchRequest.finished(exitCode === 0 && /^data:image\//.test(data) ? data : "")
+        imageFetchRequest.finished(exitCode === 0 && Html.isRasterDataImage(data) ? data : "")
       }
     }
   }

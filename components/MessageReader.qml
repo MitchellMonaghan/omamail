@@ -100,6 +100,22 @@ Item {
     Qt.openUrlExternally(url)
   }
 
+  function openImageMarker(source) {
+    var wanted = String(source || "")
+    if (Html.isRasterDataImage(wanted)) {
+      imagePopover.show(wanted)
+      return
+    }
+    if (!root.service || typeof root.service.fetchDisplayImage !== "function") {
+      imagePopover.showPrepared(wanted, "")
+      return
+    }
+    root.service.fetchDisplayImage(wanted, function(data) {
+      if (!root) return
+      imagePopover.showPrepared(wanted, data)
+    })
+  }
+
   function scrollBy(steps) {
     var maximum = Math.max(0, bodyFlick.contentHeight - bodyFlick.height)
     bodyFlick.contentY = Math.max(0, Math.min(maximum,
@@ -659,10 +675,9 @@ Item {
         var image = Html.imageLinkIndex(link)
         if (image > 0) {
           var sources = root.imageSources
-          // A marker in a plain-text body opens the picture it stands for, and
-          // "the picture" is whatever the sender wrote in the src. Opening one
-          // is a fetch, so it obeys the same rule the document does.
-          if (image <= sources.length) imagePopover.show(sources[image - 1])
+          // The marker names the sender's src. Qt must not fetch that URL
+          // itself: the account prepares raster bytes, or the popover refuses.
+          if (image <= sources.length) root.openImageMarker(sources[image - 1])
           return
         }
         root.openLink(link)
