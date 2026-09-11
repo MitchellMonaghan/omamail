@@ -622,7 +622,7 @@ Item {
   }
 
   // The list, fresh: what a mailbox switch, a search, a queued send and the
-  // reader's own "back to list" key all mean. Not a Back — the history is
+  // reader's own "back to list" keys all mean. Not a Back — the history is
   // dropped because the list under it has changed.
   function backToList() {
     pendingComposeMode = ""
@@ -1128,13 +1128,18 @@ Item {
     if (shortcutHelpVisible) {
       if (id === "cursorDown") return shortcutHelp.scrollBy(1)
       if (id === "cursorUp") return shortcutHelp.scrollBy(-1)
+      if (id === "scrollDown") return shortcutHelp.scrollBy(1)
+      if (id === "scrollUp") return shortcutHelp.scrollBy(-1)
     }
     if (id === "cursorDown") return moveCursor(1)
     if (id === "cursorUp") return moveCursor(-1)
+    if (id === "scrollDown") return reader.scrollBy(1)
+    if (id === "scrollUp") return reader.scrollBy(-1)
     // In Drafts, opening a draft from the keyboard is editing it: the
     // message is what was being written. A click still previews, so the
     // list can be read through without a composer opening on every row.
     if (id === "open") return openOrEdit(cursorId)
+    if (id === "openReader") return openOrEdit(cursorId)
     if (id === "backToList") return backToList()
     if (id === "nextMember") return stepMember(1)
     if (id === "previousMember") return stepMember(-1)
