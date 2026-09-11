@@ -2704,7 +2704,8 @@ Item {
           accentColor: root.accent
           panelFontFamily: root.fontFamily
           hints: Keymap.hintsFor(focusScope.keyContext,
-            root.service ? root.service.unavailableActions : [])
+            root.service ? root.service.unavailableActions : [],
+            root.cursorId !== "")
         }
       }
 
