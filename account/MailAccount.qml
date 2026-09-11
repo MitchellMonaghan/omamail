@@ -2892,6 +2892,7 @@ Item {
       accountId: root.accountId
       configuredClientId: root.oauthClientId
       configuredEmail: root.configuredEmail
+      entrySettings: root.imapSettings
 
       onLoginSucceeded: {
         root.lastError = lastError
@@ -2899,6 +2900,7 @@ Item {
       }
       onLoggedOut: root.clearNotice()
       onSessionUnavailable: function(reason) { root.fail(reason) }
+      onGraphRefused: function(reason) { root.note(reason) }
     }
   }
 
