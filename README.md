@@ -1,5 +1,7 @@
 # Omamail
 
+> 🎈 NOTE: I am working on refactor backend by use Rust for better experience, do not make PR waiting me to finish. 
+
 **Your mail as a native Omarchy window — not a browser tab.**
 
 Omamail is an Omarchy desktop email client: a Quickshell plugin that reads, triages, and answers your mail over the official Gmail API, through Microsoft OAuth for Outlook, over the HEY CLI client 37signals publish, over JMAP, or over IMAP and SMTP for every other mailbox. It runs inside the `omarchy-shell` process you already have, follows your active theme, and puts an unread count in the bar.
