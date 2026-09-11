@@ -574,6 +574,17 @@ function isPublicUrl(value) {
   return true
 }
 
+// A cheap spelling gate before a deliberate click leaves through the system
+// browser. It rejects unsafe schemes and names that explicitly describe this
+// machine or its private network. It is not the network boundary used for
+// automatic requests: the browser resolves DNS and follows redirects itself,
+// so only public_http.py can pin a checked destination.
+function externallyOpenableHttpUrl(value) {
+  var text = String(value || "").trim()
+  if (!/^https?:\/\//i.test(text)) return ""
+  return isPublicUrl(text) ? text : ""
+}
+
 // The host of an http(s) or protocol-relative URL, lower-cased, with the
 // userinfo, the port and everything after the authority removed. Userinfo
 // matters: "http://gmail.com@127.0.0.1/x.png" is a request to 127.0.0.1.
