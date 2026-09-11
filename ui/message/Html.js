@@ -1850,12 +1850,15 @@ function baseDirectionAttribute(palette) {
 
 // Wraps the sanitised body in a document. `colors` styles the parts the sender
 // did not: the ground, the default text, links and quoted replies.
+var PAPER = "#ffffff"
+var INK = "#000000"
 function documentFor(bodyHtml, colors) {
   var palette = colors || {}
-  var foreground = String(palette.foreground || "")
-  var background = String(palette.background || "")
-  var link = String(palette.link || foreground)
-  var quote = String(palette.quote || foreground)
+  var original = palette.preserveFormatting === true
+  var foreground = original ? INK : String(palette.foreground || "")
+  var background = original ? PAPER : String(palette.background || "")
+  var link = original ? "#1155cc" : String(palette.link || foreground)
+  var quote = original ? INK : String(palette.quote || foreground)
   // Margin on body is ignored by Qt's rich text engine, so the padding lives
   // on a wrapper the sender's markup sits inside.
   var pad = Math.max(0, Math.floor(Number(palette.padding) || 0))
@@ -1867,10 +1870,7 @@ function documentFor(bodyHtml, colors) {
   // No parse at all when the caller kept the document: this is rebuilt on every
   // relayout, and the body it is built from has not changed.
   var root = documentTree(bodyHtml)
-  // The gutters go only when the window is too narrow to spare them, because a
-  // wide one reads better with the sender's own spacing. A width the window
-  // cannot hold goes at every width: there is no horizontal scroll here, so
-  // what overflows is not read at all.
+  // Reclaim gutters only in narrow panes; always fit widths to the viewport.
   var fit = fitting(true, palette.compact === true,
     maxImage >= MIN_IMAGE_WIDTH, maxImage, true)
 
@@ -1880,7 +1880,7 @@ function documentFor(bodyHtml, colors) {
     // The quote rule indents from the side the text starts on. Qt reads only
     // physical properties — there is no `margin-inline-start` in a
     // QTextDocument — so the side is chosen here rather than by the renderer.
-    + "blockquote{color:" + quote + ";margin-" + quoteEdge + ":8px;padding-"
+    + "blockquote{" + (original ? "" : "color:" + quote + ";") + "margin-" + quoteEdge + ":8px;padding-"
       + quoteEdge + ":8px;}"
     + (palette.preserveFormatting === true ? "" : "td,th{padding:2px;}")
     + (maxImage >= MIN_IMAGE_WIDTH ? "img{max-width:" + maxImage + "px;}" : "")

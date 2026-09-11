@@ -61,6 +61,30 @@ Item {
       verify(last - first >= 75)
     }
 
+    function test_original_default_text_is_dark_and_sender_color_survives() {
+      var ready = prepare('<table bgcolor="#ffffff"><tr><td>Default</td>'
+        + '<td style="color:#ff0000">Explicit</td></tr></table>', {preserveFormatting: true})
+      document.width = 280
+      document.font.pixelSize = 18
+      document.color = Qt.rgba(0.8, 0.8, 0.8, 1)
+      document.text = Html.documentFor(ready.document, {preserveFormatting: true,
+        foreground: "#cccccc", background: "#111111"})
+      waitForRendering(document)
+      var pixels = grabImage(document)
+      var dark = 0
+      var red = 0
+      for (var y = 0; y < pixels.height; y++) {
+        for (var x = 0; x < pixels.width; x++) {
+          var color = pixels.pixel(x, y)
+          if (color.a < 0.8) continue
+          if (color.r < 0.15 && color.g < 0.15 && color.b < 0.15) dark++
+          if (color.r > 0.8 && color.g < 0.15 && color.b < 0.15) red++
+        }
+      }
+      verify(dark > 10, "Unstyled text must not inherit the light desktop foreground")
+      verify(red > 10, "Explicit sender text color must still win")
+    }
+
     function test_original_css_image_centering() {
       // A 640x320 canvas displayed at 40px high, like a height-only hero image.
       var image = 'data:image/gif;base64,R0lGODlhgAJAAYAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'

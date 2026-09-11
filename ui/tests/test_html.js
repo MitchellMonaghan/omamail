@@ -3,6 +3,22 @@ const { load, deepEqual } = require("./load")
 
 const html = load("message/Html.js")
 
+{
+  const source = html.sanitize('<table bgcolor="#ffffff"><tr><td>Unstyled footer</td>'
+    + '<td style="color:#abcdef;background-color:#123456">Sender color</td></tr></table>',
+    {preserveFormatting: true}).document
+  const palette = {foreground: '#cccccc', background: '#111111', link: '#bb9900'}
+  const original = html.documentFor(source, {...palette, preserveFormatting: true})
+  assert(original.includes('body{color:#000000;background-color:#ffffff;}'))
+  assert(original.includes('color:#abcdef;background-color:#123456'))
+  const dark = html.sanitize('<div style="color:#ffffff;background-color:#000000">'
+    + '<blockquote>Inherited text</blockquote></div>', {preserveFormatting: true}).document
+  const darkPage = html.documentFor(dark, {...palette, preserveFormatting: true})
+  assert(darkPage.includes('color:#ffffff;background-color:#000000'))
+  assert(!darkPage.includes('blockquote{color:'), 'Original quotes inherit sender text color')
+  assert(html.documentFor(source, palette).includes('body{color:#cccccc;background-color:#111111;}'))
+}
+
 // A newsletter can make the entire status strip one link. Keep its checked
 // destination on each rebuilt label/icon, including across nested layout cells.
 {
