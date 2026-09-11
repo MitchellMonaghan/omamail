@@ -397,9 +397,11 @@ Item {
   property var deferredListLoad: null
   property var queuedActions: []
   property bool sending: false
-  property var pendingSend: null
+  readonly property alias sendQueue: sendQueue
+  readonly property int sendPendingCount: sendQueue.parked.length
+  readonly property bool sendPending: sendQueue.parked.length > 0
+  readonly property var latestSend: sendQueue.latest
   property int sendSecondsRemaining: 0
-  readonly property bool sendPending: pendingSend !== null
 
   // Notifications only start once the first successful load has established
   // what was already there.
@@ -2206,18 +2208,18 @@ Item {
   // holding, and a return that says nothing throws it away. The mailbox can
   // stop being ready during the undo window — a reload, a sign-out — so the
   // guards are reachable and not only the transport's own error.
-  function reportSendFailure(error) {
+  function reportSendFailure(error, sendId) {
     fail(error)
     // A zero-delay send can be rejected synchronously by a provider before
     // ComposeView has returned from service.send() and parked its accepted
     // draft. Cross the event-loop boundary so every terminal signal observes
     // the same state as an ordinary network reply.
     Qt.callLater(function() {
-      if (root) root.replyFailed()
+      if (root) root.replyFailed(String(sendId || ""))
     })
   }
 
-  function reportSendSuccess(result) {
+  function reportSendSuccess(result, sendId) {
     // The sent copy is filed after the send has answered, so how the filing
     // went is a footnote on a success rather than a failure of one: the note
     // says what happened to the copy, and the reply still counts as sent.
@@ -2226,28 +2228,31 @@ Item {
     // Success has the same ordering requirement as failure: a provider may
     // finish locally, but the composer owns parking after send() returns.
     Qt.callLater(function() {
-      if (root) root.replySent()
+      if (root) root.replySent(String(sendId || ""))
     })
   }
 
   function deliver(payload) {
+    var sendId = payload ? String(payload.sendId || "") : ""
     if (!ready) {
-      reportSendFailure("The mailbox is not ready to send")
+      reportSendFailure("The mailbox is not ready to send", sendId)
       return false
     }
     if (sending) {
-      reportSendFailure("Another message is still being sent")
+      reportSendFailure("Another message is still being sent", sendId)
       return false
     }
     sending = true
     api.sendMessage(payload, function(sentPayload, error) {
       root.sending = false
       if (error) {
-        root.reportSendFailure(error)
+        root.reportSendFailure(error, sendId)
+        Qt.callLater(sendQueue.deliverDue)
         return
       }
-      root.reportSendSuccess(sentPayload)
+      root.reportSendSuccess(sentPayload, sendId)
       if (payload && String(payload.draftId || "") !== "") root.forgetSentDraft(String(payload.draftId))
+      Qt.callLater(sendQueue.deliverDue)
     })
     return true
   }
@@ -2273,24 +2278,13 @@ Item {
   }
 
 
-  function deliverPending() {
-    if (!sendPending) return false
-    var payload = pendingSend.payload
-    sendDelayTimer.stop()
-    sendCountdownTimer.stop()
-    pendingSend = null
-    sendSecondsRemaining = 0
-    return deliver(payload)
-  }
+  function deliverPending() { return sendQueue.deliverAll() }
 
-  function undoSend() {
-    if (!sendPending) return false
-    sendDelayTimer.stop()
-    sendCountdownTimer.stop()
-    pendingSend = null
-    sendSecondsRemaining = 0
-    note("Send undone")
-    return true
+  function undoSend() { return sendQueue.undoLatest() }
+
+  SendQueue {
+    id: sendQueue
+    account: root
   }
 
   // A mailbox whose token was just refused is not ready until the next
@@ -2368,17 +2362,21 @@ Item {
   }
 
 
-  function send(fields) {
-    if (sending || sendPending) return false
+  function send(fields, sendId, order) {
+    var id = String(sendId || "")
+    if (id === "") {
+      sendQueue.serial += 1
+      id = "send-" + sendQueue.serial
+    }
     if (!ready) {
       // Asked for its credentials first, like a save: a token refused a
       // moment ago is looked up again rather than the send refused.
       whenReady(function(ok) {
         if (!root) return
-        if (ok) root.send(fields)
-        else root.reportSendFailure("The mailbox is not ready to send")
+        if (ok) root.send(fields, id, order)
+        else root.reportSendFailure("The mailbox is not ready to send", id)
       })
-      return true
+      return id
     }
     var values = fields || ({})
     var files = Array.isArray(values.attachments) ? values.attachments : []
@@ -2432,23 +2430,15 @@ Item {
     // itself carries only the raw message and the thread.
     payload.draftId = String(values.draftId || "")
 
-    var queued = Outbox.schedule(payload, Date.now(), undoSendSeconds)
-    if (!queued) return deliver(payload)
-
-    pendingSend = queued
-    sendSecondsRemaining = Outbox.remainingSeconds(queued.dueAt, Date.now())
-    sendDelayTimer.interval = Math.max(1, queued.dueAt - Date.now())
-    sendDelayTimer.restart()
-    sendCountdownTimer.restart()
-    note("Message queued")
-    return true
+    payload.sendId = id
+    return sendQueue.park(payload, id, order) ? id : ""
   }
 
-  signal replySent()
+  signal replySent(string sendId)
 
   // A send that did not happen. The panel answers it by putting the parked
   // draft back in front of the writer, which is the only remaining copy.
-  signal replyFailed()
+  signal replyFailed(string sendId)
 
   // ------------------------------------------------------------------ RSVP
 
@@ -2982,25 +2972,6 @@ Item {
     onTriggered: root.actionStatus = ""
   }
 
-  Timer {
-    id: sendDelayTimer
-    repeat: false
-    onTriggered: root.deliverPending()
-  }
-
-  Timer {
-    id: sendCountdownTimer
-    interval: 250
-    repeat: true
-    onTriggered: {
-      if (!root.sendPending) {
-        stop()
-        return
-      }
-      root.sendSecondsRemaining = Outbox.remainingSeconds(
-        root.pendingSend.dueAt, Date.now())
-    }
-  }
 
   // The unread count is one label read — cheap enough to keep running while
   // the panel is closed, which is the only way the bar badge stays honest.

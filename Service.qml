@@ -1459,11 +1459,15 @@ Item {
   }
   readonly property bool sending: !!sendingHost
   readonly property var pendingSendHost: {
+    var newest = null
     for (var i = 0; i < accountHosts.count; i++) {
       var host = accountHosts.objectAt(i)
-      if (host && host.sendPending) return host
+      if (!host || !host.sendPending) continue
+      if (!newest || host.latestSend.order > newest.latestSend.order
+          || (host.latestSend.order === newest.latestSend.order
+            && host.latestSend.queuedAt > newest.latestSend.queuedAt)) newest = host
     }
-    return null
+    return newest
   }
   readonly property bool sendPending: !!pendingSendHost
   readonly property int sendSecondsRemaining: pendingSendHost
@@ -1489,6 +1493,42 @@ Item {
     }
     return newest
   }
+  readonly property int sendPendingCount: {
+    var total = 0
+    for (var i = 0; i < accountHosts.count; i++) {
+      var host = accountHosts.objectAt(i)
+      if (host) total += host.sendPendingCount
+    }
+    return total
+  }
+  readonly property int sendingCount: {
+    var total = 0
+    for (var i = 0; i < accountHosts.count; i++) {
+      var host = accountHosts.objectAt(i)
+      if (host && host.sending) total += 1
+    }
+    return total
+  }
+  readonly property int runningActionCount: {
+    var total = 0
+    for (var i = 0; i < accountHosts.count; i++) {
+      var host = accountHosts.objectAt(i)
+      if (host && host.pendingAction !== "") total += 1
+    }
+    return total
+  }
+  readonly property int queuedActionCount: {
+    var total = 0
+    for (var i = 0; i < accountHosts.count; i++) {
+      var host = accountHosts.objectAt(i)
+      if (host) total += host.queuedActions.length
+    }
+    return total
+  }
+  readonly property string activityStatus: Model.activityStatus({
+    sending: sendingCount, queuedSends: sendPendingCount,
+    running: runningActionCount, waiting: queuedActionCount
+  })
   readonly property string signInProgress: current ? current.signInProgress : ""
   // Whether the mailbox on screen has had its credential refused. The setup
   // page draws the re-entry card from this; nothing signs out over it.
@@ -1669,23 +1709,15 @@ Item {
   // `sendIdentities` spans every account and carries the id, so a unified
   // view needed the routing rather than a new question.
   function send(fields) {
-    // The button has the same guard, but Ctrl+Return reaches this function
-    // directly. Enforce the one-global-parked-draft invariant at the action
-    // boundary so another account cannot overwrite it.
-    if (pendingSendHost) {
-      if (current) current.fail("Another message is waiting to be sent")
-      return false
-    }
-    if (sendingHost) {
-      if (current) current.fail("Another message is still being sent")
-      return false
-    }
     // The mailbox the From address belongs to. `sendIdentities` spans every
     // account and carries the id, so compose can already name one; this is the
     // routing it was missing.
     var values = fields || ({})
     var host = sendHostFor(values)
-    return host ? host.send(withSignatures(withSourceDraftId(values), host)) : false
+    if (!host) return false
+    sendSequence += 1
+    return host.send(withSignatures(withSourceDraftId(values), host),
+      "send-" + sendSequence, sendSequence)
   }
 
   // The mailbox a submission is sent from.
@@ -1767,6 +1799,8 @@ Item {
     values.signatureHtml = entry ? String(entry.signatureHtml || "") : ""
     return values
   }
+
+  property int sendSequence: 0
 
   function saveDraft(fields, callback) {
     var values = fields || ({})
@@ -1956,13 +1990,13 @@ Item {
     callback("", "The Google calendar account is not signed in")
   }
 
-  signal replySent()
-  signal replyFailed()
+  signal replySent(string sendId)
+  signal replyFailed(string sendId)
 
   // A queued send keeps running on its own account when the visible mailbox
   // changes. Put that account back in front before App restores the draft, so
   // a retry cannot be addressed to whichever mailbox happened to be visible.
-  function forwardReplyFailure(index) {
+  function forwardReplyFailure(index, sendId) {
     var host = accountAt(index)
     // Not in a merged list. The switch exists so a retry cannot be addressed
     // to whichever mailbox happened to be visible, and in a merged view the
@@ -1971,7 +2005,7 @@ Item {
     // the combined view to report a failure, which is not what was asked for,
     // and it would do it behind `App.switchAccount`'s back.
     if (host && host !== current && !unified) switchToIndex(index)
-    replyFailed()
+    replyFailed(String(sendId || ""))
   }
 
   // ------------------------------------------------------------- instances
@@ -2054,8 +2088,8 @@ Item {
       onServerSettingsLearned: function(jmap) { root.configureAccount(index, { jmap: jmap }) }
       onReadyChanged: root.recount()
       onInboxUnreadChanged: root.recount()
-      onReplySent: root.replySent()
-      onReplyFailed: root.forwardReplyFailure(index)
+      onReplySent: function(sendId) { root.replySent(String(sendId || "")) }
+      onReplyFailed: function(sendId) { root.forwardReplyFailure(index, sendId) }
       onMonitoredMigrated: function(ids) { root.setMonitoredIds(index, ids) }
 
       // What a merged list is made of, and everything a merged list says

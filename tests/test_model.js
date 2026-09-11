@@ -1480,6 +1480,12 @@ const alsoDeep = { id: "m", a: { b: { c: { d: { e: 1 } } } } }
 assert.strictEqual(model.sameSummaries([deep], [alsoDeep]), false,
   "the comparison stops rather than following an unbounded structure")
 
+assert.strictEqual(model.activityStatus({}), "", "nothing in flight says nothing")
+assert.strictEqual(model.activityStatus({ sending: 1 }), "Sending")
+assert.strictEqual(model.activityStatus({ sending: 2, queuedSends: 3 }), "Sending 2 \u00b7 3 queued to send")
+assert.strictEqual(model.activityStatus({ running: 1, waiting: 4 }), "1 action running \u00b7 4 waiting")
+assert.strictEqual(model.activityStatus({ sending: "x", waiting: -2 }), "", "nonsense counts are zero")
+
 // ------------------------------------------------------------ label names
 {
   assert.strictEqual(model.labelLeaf("Archive/2026/Q1", "/"), "Q1")

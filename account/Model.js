@@ -1887,6 +1887,21 @@ function togglePath(paths, path) {
   return toggleId(paths, path)
 }
 
+function activityStatus(counts) {
+  var c = counts || {}
+  function count(value) { return Math.max(0, Math.floor(Number(value)) || 0) }
+  var sending = count(c.sending)
+  var queuedSends = count(c.queuedSends)
+  var running = count(c.running)
+  var waiting = count(c.waiting)
+  var parts = []
+  if (sending > 0) parts.push(sending === 1 ? "Sending" : "Sending " + sending)
+  if (queuedSends > 0) parts.push(queuedSends + " queued to send")
+  if (running > 0) parts.push(running === 1 ? "1 action running" : running + " actions running")
+  if (waiting > 0) parts.push(waiting + " waiting")
+  return parts.join(" \u00b7 ")
+}
+
 // ------------------------------------------------------------ label names
 
 // A label's path taken apart and put together with the delimiter its
@@ -2024,4 +2039,3 @@ function monitoredNote(grown) {
   var more = list.length - parts.length
   return parts.join(", ") + (more > 0 ? " and " + more + " more" : "")
 }
-
